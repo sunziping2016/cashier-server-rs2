@@ -1,0 +1,4 @@
+{
+  "bind": "localhost:8000",
+  "db": "postgresql://cashier@localhost"
+}

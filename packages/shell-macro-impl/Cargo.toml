@@ -1,0 +1,13 @@
+[package]
+name = "shell-macro-impl"
+version = "0.1.0"
+authors = ["Sun Ziping <sunziping2016@gmail.com>"]
+edition = "2018"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro-hack = "0.5"
+quote = "1.0.6"
+syn = "1.0.30"

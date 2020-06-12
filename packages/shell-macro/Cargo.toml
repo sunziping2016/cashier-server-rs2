@@ -1,0 +1,9 @@
+[package]
+name = "shell-macro"
+version = "0.1.0"
+authors = ["Sun Ziping <sunziping2016@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+proc-macro-hack = "0.5"
+shell-macro-impl = { path = "../shell-macro-impl" }
