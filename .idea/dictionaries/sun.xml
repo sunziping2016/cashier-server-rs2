@@ -2,6 +2,7 @@
   <dictionary name="sun">
     <words>
       <w>bcrypt</w>
+      <w>multer</w>
     </words>
   </dictionary>
 </component>

@@ -197,7 +197,7 @@ impl Query {
         if let Some(row) = duplicated_rows.get(0) {
             return Err(Error::DuplicatedUser {
                 field: if row.get::<&str, String>("username") == username { "username".into() }
-                else { "password".into() }
+                else { "email".into() }
             });
         }
         let password = String::from(password);

@@ -75,3 +75,9 @@ There should exists one single document in `globalSettings` document.
 |updatedAt|Date|last time to update the global settings|
 
 All fields are required.
+
+## 2 TODO
+
+- [ ] Multipart
+- [ ] WebSocket
+- [ ] Captcha

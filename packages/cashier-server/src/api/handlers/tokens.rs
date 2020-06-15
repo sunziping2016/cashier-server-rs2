@@ -2,7 +2,7 @@ use crate::{
     api::{
         extractors::{
             auth::Auth,
-            json::Json,
+            config::default_json_config,
         },
         errors::{ApiError, ApiResult, respond},
         app_state::AppState,
@@ -23,6 +23,7 @@ use actix_web::{
     web,
     http::HeaderValue,
 };
+use actix_web_validator::{ValidatedJson, JsonConfig};
 use serde::{Serialize, Deserialize};
 use validator::Validate;
 use validator_derive::Validate;
@@ -33,7 +34,7 @@ struct AcquireTokenResponse {
 }
 
 #[derive(Debug, Validate, Deserialize)]
-struct AcquireTokenByUsernameRequest {
+pub struct AcquireTokenByUsernameRequest {
     #[validate]
     username: Username,
     #[validate]
@@ -43,7 +44,7 @@ struct AcquireTokenByUsernameRequest {
 //noinspection RsTypeCheck,RsTypeCheck,RsTypeCheck
 async fn acquire_token_by_username(
     app_data: web::Data<AppState>,
-    data: Json<AcquireTokenByUsernameRequest>,
+    data: ValidatedJson<AcquireTokenByUsernameRequest>,
     auth: Auth,
     req: web::HttpRequest,
 ) -> ApiResult<AcquireTokenResponse> {
@@ -74,7 +75,7 @@ async fn acquire_token_by_username(
 }
 
 #[derive(Debug, Validate, Deserialize)]
-struct AcquireTokenByEmailRequest {
+pub struct AcquireTokenByEmailRequest {
     #[validate]
     email: Email,
     #[validate]
@@ -84,7 +85,7 @@ struct AcquireTokenByEmailRequest {
 //noinspection ALL
 async fn acquire_token_by_email(
     app_data: web::Data<AppState>,
-    data: Json<AcquireTokenByEmailRequest>,
+    data: ValidatedJson<AcquireTokenByEmailRequest>,
     auth: Auth,
     req: web::HttpRequest,
 ) -> ApiResult<AcquireTokenResponse> {
@@ -181,28 +182,24 @@ async fn revoke_token_for_me(
 }
 
 
-pub fn tokens_api(cfg: &mut web::ServiceConfig) {
-    cfg.service(
-        web::scope("/tokens")
-            .route("/acquire-by-username", web::post().to(acquire_token_by_username))
-            .route("/acquire-by-email", web::post().to(acquire_token_by_email))
-            .route("/resume", web::post().to(resume_token))
-            .service(
-                web::scope("/users")
-                    .route("/me", web::get().to(list_token_for_me))
-                    .route("/me", web::delete().to(revoke_token_for_me))
-                    // .route("/{uid}", web::get().to(list_token_by_uid))
-                    // .route("/{uid}", web::delete().to(revoke_token_by_uid))
-            )
-            .service(
-                web::scope("/jwt")
-                    // .route("/{jti}", web::get().to(read_token_by_jti))
-                    // .route("/{jti}", web::delete().to(revoke_token_by_jti))
-            )
-            .service(
-                web::scope("/my-jwt")
-                    // .route("/{jti}", web::get().to(read_token_for_me_by_jti))
-                    // .route("/{jti}", web::delete().to(revoke_token_for_me_by_jti))
-            )
-    );
+pub fn tokens_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::ServiceConfig)> {
+    let state = state.clone();
+    Box::new(move |cfg| {
+        cfg.service(
+            web::scope("/tokens")
+                .app_data(state)
+                .app_data(default_json_config(JsonConfig::default()))
+                .route("/acquire-by-username", web::post().to(acquire_token_by_username))
+                .route("/acquire-by-email", web::post().to(acquire_token_by_email))
+                .route("/resume", web::post().to(resume_token))
+                .route("/users/me", web::get().to(list_token_for_me))
+                .route("/users/me", web::delete().to(revoke_token_for_me))
+                // .route("/users/{uid}", web::get().to(list_token_by_uid))
+                // .route("/users/{uid}", web::delete().to(revoke_token_by_uid))
+                // .route("/jwt/{jti}", web::get().to(read_token_by_jti))
+                // .route("/jwt/{jti}", web::delete().to(revoke_token_by_jti))
+                // .route("/my-jwt/{jti}", web::get().to(read_token_for_me_by_jti))
+                // .route("/my-jwt/{jti}", web::delete().to(revoke_token_for_me_by_jti))
+        );
+    })
 }

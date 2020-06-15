@@ -43,9 +43,8 @@ pub async fn start(config: &StartConfig) -> Result<()> {
     });
     HttpServer::new(move || {
         App::new()
-            .app_data(app_data.clone())
             .wrap(Logger::default())
-            .configure(api_v1)
+            .configure(api_v1(&app_data))
     })
         .bind(&config.bind)?
         .run()
