@@ -2,7 +2,11 @@ use crate::{
     api::{
         extractors::{
             auth::Auth,
-            config::default_json_config,
+            multer::Multer,
+            config::{
+                default_json_config,
+                avatar_multer_config,
+            },
         },
         errors::{ApiError, ApiResult, respond},
         app_state::AppState,
@@ -20,7 +24,7 @@ use crate::{
     internal_server_error,
 };
 use actix_web::web;
-use actix_web_validator::{ValidatedJson, JsonConfig};
+use actix_web_validator::ValidatedJson;
 use serde::{Serialize, Deserialize};
 use validator::Validate;
 use validator_derive::Validate;
@@ -79,13 +83,20 @@ async fn create_user(
     })
 }
 
+async fn upload_avatar(
+    mut data: Multer,
+) -> ApiResult<()> {
+    data.get_mut_single("avatar").extra_mut().accept();
+    respond(())
+}
+
 pub fn users_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::ServiceConfig)> {
     let state = state.clone();
     Box::new(move |cfg| {
         cfg.service(
             web::scope("users")
                 .app_data(state)
-                .app_data(default_json_config(JsonConfig::default()))
+                .app_data(default_json_config())
                 // .route("/default/permissions", web::get().to(index))
                 // .route("/public/{id}", web::get().to(index))
                 // .route("/public", web::get().to(index))
@@ -96,7 +107,11 @@ pub fn users_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::Servic
                 // .route("/me", web::patch().to(index))
                 // .route("/me", web::delete().to(index))
                 // .route("/{id}/password", web::post().to(index))
-                // .route("/{id}/avatar", web::post().to(index))
+                .service(
+                    web::scope("/{id}/avatar")
+                        .app_data(avatar_multer_config())
+                        .route("", web::post().to(upload_avatar))
+                )
                 // .route("/{id}/permissions", web::get().to(index))
                 // .route("/{id}", web::get().to(index))
                 // .route("/{id}", web::patch().to(index))

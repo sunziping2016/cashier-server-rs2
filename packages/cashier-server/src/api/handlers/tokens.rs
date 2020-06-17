@@ -23,7 +23,7 @@ use actix_web::{
     web,
     http::HeaderValue,
 };
-use actix_web_validator::{ValidatedJson, JsonConfig};
+use actix_web_validator::ValidatedJson;
 use serde::{Serialize, Deserialize};
 use validator::Validate;
 use validator_derive::Validate;
@@ -188,7 +188,7 @@ pub fn tokens_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::Servi
         cfg.service(
             web::scope("/tokens")
                 .app_data(state)
-                .app_data(default_json_config(JsonConfig::default()))
+                .app_data(default_json_config())
                 .route("/acquire-by-username", web::post().to(acquire_token_by_username))
                 .route("/acquire-by-email", web::post().to(acquire_token_by_email))
                 .route("/resume", web::post().to(resume_token))

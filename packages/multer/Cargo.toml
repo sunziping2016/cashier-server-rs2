@@ -1,0 +1,17 @@
+[package]
+name = "multer"
+version = "0.1.0"
+authors = ["Sun Ziping <sunziping2016@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+actix-multipart = "0.2"
+actix-web = "2.0"
+bytes = "0.5.4"
+err-derive = "0.2.4"
+futures = "0.3.5"
+log = "0.4.8"
+mime = "0.3"
+rand = "0.7.3"
+sanitize-filename = "0.2.1"
+tokio = { version = "0.2.21", features = ["full"] }

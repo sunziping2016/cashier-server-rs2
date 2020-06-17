@@ -63,6 +63,10 @@ pub enum ApiError {
     DuplicatedUser {
         field: String,
     },
+    #[error(display = "invalid multipart payload causing by {}", error)]
+    MultipartPayloadError {
+        error: String,
+    },
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -178,6 +182,7 @@ impl From<ApiError> for ApiErrorWrapper {
             ApiError::PermissionDenied { .. }
             | ApiError::AttemptToElevateRole { .. } => 403,
             ApiError::JsonPayloadError { .. }
+            | ApiError::MultipartPayloadError { .. }
             | ApiError::ValidationError { .. }
             | ApiError::MissingAuthorizationHeader => 400,
             ApiError::DuplicatedUser { .. } => 409,
@@ -206,6 +211,7 @@ impl ResponseError for ApiError {
             | ApiError::AttemptToElevateRole { .. } =>
                 HttpResponse::Forbidden().json(ApiErrorWrapper::from(self.clone())),
             ApiError::JsonPayloadError { .. }
+            | ApiError::MultipartPayloadError { .. }
             | ApiError::ValidationError { .. }
             | ApiError::MissingAuthorizationHeader =>
                 HttpResponse::BadRequest().json(ApiErrorWrapper::from(self.clone())),

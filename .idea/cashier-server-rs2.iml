@@ -6,6 +6,7 @@
       <sourceFolder url="file://$MODULE_DIR$/packages/cashier-server/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/packages/shell-macro/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/packages/shell-macro-impl/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/packages/multer/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />

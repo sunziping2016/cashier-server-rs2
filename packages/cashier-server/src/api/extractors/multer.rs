@@ -1,19 +1,41 @@
-use std::collections::HashMap;
+use crate::{
+    api::errors::ApiError,
+    internal_server_error,
+};
 use actix_multipart::Multipart;
+use actix_web::{
+    FromRequest, HttpRequest,
+    dev::{PayloadStream, Payload},
+};
+use derive_more::{Deref, DerefMut, From};
+use futures::future::{LocalBoxFuture, FutureExt};
+use multer::{MulterResults, MulterConfig, MulterError, multer};
+use std::rc::Rc;
 
-pub trait Storage {
-    type File;
-}
+#[derive(Deref, DerefMut, From)]
+pub struct Multer(MulterResults);
 
-pub struct FieldConfig {
-    min_count: usize,
-    max_count: usize,
-}
+impl FromRequest for Multer {
+    type Error = ApiError;
+    type Future = LocalBoxFuture<'static, Result<Self, ApiError>>;
+    type Config = Rc<MulterConfig>;
 
-pub struct MulterConfig {
-    fields: HashMap<String, FieldConfig>,
-}
-
-pub async fn multipart(_payload: Multipart) {
-
+    fn from_request(req: &HttpRequest, payload: &mut Payload<PayloadStream>) -> Self::Future {
+        let multer_config = req
+            .app_data::<Self::Config>()
+            .expect("must provide a configuration")
+            .clone();
+        let multipart = Multipart::new(req.headers(), payload.take());
+        async move {
+            let result = multer(multipart, &multer_config)
+                .await
+                .map_err(|err| match err {
+                    MulterError::BlockingIoError(e) => internal_server_error!(e),
+                    e => ApiError::MultipartPayloadError {
+                        error: format!("{}", e),
+                    },
+                })?;
+            Ok(result.into())
+        }.boxed_local()
+    }
 }

@@ -13,9 +13,7 @@ use crate::{
 use actix_web::{
     web, FromRequest,
 };
-use futures::{
-    future::{LocalBoxFuture, FutureExt}
-};
+use futures::future::{LocalBoxFuture, FutureExt};
 
 #[derive(Debug)]
 pub struct Auth {
@@ -109,7 +107,7 @@ impl FromRequest for Auth {
                 claims,
                 permissions,
             })
-        }.boxed()
+        }.boxed_local()
     }
 }
 

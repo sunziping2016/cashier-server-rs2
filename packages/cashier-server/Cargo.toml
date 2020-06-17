@@ -19,6 +19,8 @@ futures = "0.3.5"
 jsonwebtoken = "7.1.1"
 lazy_static = "1.4.0"
 log = "0.4.8"
+mime = "0.3"
+multer = { path = "../multer" }
 regex = "1"
 rand = "0.7.3"
 rpassword = "4.0.5"
