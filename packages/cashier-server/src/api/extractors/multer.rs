@@ -10,7 +10,7 @@ use actix_web::{
 use derive_more::{Deref, DerefMut, From};
 use futures::future::{LocalBoxFuture, FutureExt};
 use multer::{MulterResults, MulterConfig, MulterError, multer};
-use std::rc::Rc;
+use std::sync::Arc;
 
 #[derive(Deref, DerefMut, From)]
 pub struct Multer(MulterResults);
@@ -18,7 +18,7 @@ pub struct Multer(MulterResults);
 impl FromRequest for Multer {
     type Error = ApiError;
     type Future = LocalBoxFuture<'static, Result<Self, ApiError>>;
-    type Config = Rc<MulterConfig>;
+    type Config = Arc<MulterConfig>;
 
     fn from_request(req: &HttpRequest, payload: &mut Payload<PayloadStream>) -> Self::Future {
         let multer_config = req

@@ -39,6 +39,9 @@ pub const PREDEFINED_PERMISSIONS: &[PredefinedPermission] = &[
     // CRUD for user's avatar
     PredefinedPermission("user-avatar", "update", "Update Self User Avatar", "Update user's avatar via POST /api/users/:id/avatar"),
     PredefinedPermission("user-avatar", "update-self", "Update Self User Avatar", "Update user's avatar via POST /api/users/me/avatar"),
+    // CRUD for user's role
+    PredefinedPermission("user-role", "read", "Read User's Role", "Read user's roles via GET /api/users/:id/roles"),
+    PredefinedPermission("user-role", "read-self", "Read Self User's Role", "Read user's own roles via GET /api/users/me/roles"),
     // CRUD for user's permission
     PredefinedPermission("user-permission", "read", "Read User's Permission", "Read user's permissions via GET /api/users/:id/permissions"),
     PredefinedPermission("user-permission", "read-default", "Read Default User's Permission", "Read default user's permissions via GET /api/users/default/permissions"),
@@ -89,6 +92,7 @@ pub const PREDEFINED_ROLES: &[PredefinedRole] = &[
         ("user-password", "update"),
         ("user-avatar", "update"),
         ("user", "delete"),
+        ("user-role", "read"),
         ("user-permission", "read"),
     ], "Administrator for Users", "Manage users", false),
     PredefinedRole("normal-user", &[
@@ -98,6 +102,7 @@ pub const PREDEFINED_ROLES: &[PredefinedRole] = &[
         ("user-public", "list"),
         ("user-password", "update-self"),
         ("user-avatar", "update-self"),
+        ("user-role", "read-self"),
         ("user-permission", "read-self"),
         ("token", "resume"),
         ("token", "revoke-self"),

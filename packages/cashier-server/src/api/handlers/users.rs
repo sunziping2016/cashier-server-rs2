@@ -22,6 +22,7 @@ use crate::{
     },
     queries::{
         errors::Error as QueryError,
+        users::User,
     },
     internal_server_error,
 };
@@ -127,14 +128,11 @@ fn remove_avatar_file<P1: AsRef<Path>, P2: AsRef<Path>>(root: P1, path: P2) {
     }
 }
 
-async fn upload_avatar(
+async fn upload_avatar_impl(
     app_data: web::Data<AppState>,
-    uid_path: ValidatedPath<UidPath>,
+    uid: i32,
     data: Multer,
-    auth: Auth,
 ) -> ApiResult<UploadAvatarResponse> {
-    auth.try_permission("user-avatar", "update")?;
-    let uid = uid_path.uid.clone().into();
     // Fetch old avatars
     let old_avatars = app_data.query.user
         .fetch_avatars(&*app_data.db.read().await, uid)
@@ -181,7 +179,7 @@ async fn upload_avatar(
         .await
         .map_err(|err| match err {
             BlockingError::Error(ImageError::Decoding(_))
-                => ApiError::AvatarError { error: "cannot decode the uploaded avatar".into(), },
+            => ApiError::AvatarError { error: "cannot decode the uploaded avatar".into(), },
             e => internal_server_error!(e),
         })?;
     // Save new avatars to database
@@ -217,6 +215,63 @@ async fn upload_avatar(
     })
 }
 
+async fn upload_avatar_for_me(
+    app_data: web::Data<AppState>,
+    data: Multer,
+    auth: Auth,
+) -> ApiResult<UploadAvatarResponse> {
+    auth.try_permission("user-avatar", "update-self")?;
+    let uid = auth.claims.ok_or_else(|| ApiError::MissingAuthorizationHeader)?.uid;
+    upload_avatar_impl(app_data, uid, data).await
+}
+
+async fn upload_avatar(
+    app_data: web::Data<AppState>,
+    uid_path: ValidatedPath<UidPath>,
+    data: Multer,
+    auth: Auth,
+) -> ApiResult<UploadAvatarResponse> {
+    auth.try_permission("user-avatar", "update")?;
+    let uid = uid_path.uid.clone().into();
+    upload_avatar_impl(app_data, uid, data).await
+}
+
+async fn read_user_impl(
+    app_data: web::Data<AppState>,
+    uid: i32,
+) -> ApiResult<User> {
+    let mut user = app_data.query.user
+        .find_one(&*app_data.db.read().await, uid)
+        .await
+        .map_err(|err| match err {
+            QueryError::UserNotFound => ApiError::UserNotFound,
+            e => internal_server_error!(e),
+        })?;
+    let media_url = &app_data.config.media.url;
+    user.avatar = user.avatar.as_ref().map(|x| join_avatar_url(media_url, x));
+    user.avatar128 = user.avatar128.as_ref().map(|x| join_avatar_url(media_url, x));
+    respond(user)
+}
+
+async fn read_user_for_me(
+    app_data: web::Data<AppState>,
+    auth: Auth,
+) -> ApiResult<User> {
+    auth.try_permission("user", "read-self")?;
+    let uid = auth.claims.ok_or_else(|| ApiError::MissingAuthorizationHeader)?.uid;
+    read_user_impl(app_data, uid).await
+}
+
+async fn read_user(
+    app_data: web::Data<AppState>,
+    uid_path: ValidatedPath<UidPath>,
+    auth: Auth,
+) -> ApiResult<User> {
+    auth.try_permission("user", "read")?;
+    let uid = uid_path.uid.clone().into();
+    read_user_impl(app_data, uid).await
+}
+
 pub fn users_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::ServiceConfig)> {
     if let Err(e) = std::fs::create_dir_all(Path::new(&state.config.media.root)
         .join(crate::constants::AVATAR_FOLDER))  {
@@ -232,9 +287,16 @@ pub fn users_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::Servic
                 // .route("/public/{uid}", web::get().to(index))
                 // .route("/public", web::get().to(index))
                 // .route("/me/password", web::post().to(index))
-                // .route("/me/avatar", web::post().to(index))
+                .service(
+                    web::scope("/me/avatar")
+                        .app_data(state.clone())
+                        .app_data(default_path_config())
+                        .app_data(avatar_multer_config())
+                        .route("", web::post().to(upload_avatar_for_me))
+                )
+                // .route("/me/roles", web::get().to(index))
                 // .route("/me/permissions", web::get().to(index))
-                // .route("/me", web::get().to(index))
+                .route("/me", web::get().to(read_user_for_me))
                 // .route("/me", web::patch().to(index))
                 // .route("/me", web::delete().to(index))
                 // .route("/{uid}/password", web::post().to(index))
@@ -245,8 +307,9 @@ pub fn users_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::Servic
                         .app_data(avatar_multer_config())
                         .route("", web::post().to(upload_avatar))
                 )
+                // .route("/{uid}/roles", web::get().to(index))
                 // .route("/{uid}/permissions", web::get().to(index))
-                // .route("/{uid}", web::get().to(index))
+                .route("/{uid}", web::get().to(read_user))
                 // .route("/{uid}", web::patch().to(index))
                 // .route("/{uid}", web::delete().to(index))
                 .route("", web::post().to(create_user))

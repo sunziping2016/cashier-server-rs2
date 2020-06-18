@@ -1,8 +1,5 @@
 use super::errors::{Error, Result};
-use chrono::{
-    DateTime,
-    Utc,
-};
+use chrono::{DateTime, Utc};
 use serde::{Serialize, Deserialize};
 use tokio_postgres::{
     Client, Statement,
@@ -34,8 +31,8 @@ pub struct JwtClaims {
 pub struct Token {
     pub id: i32,
     pub user: i32,
-    pub issued_at: chrono::DateTime<Utc>,
-    pub expires_at: chrono::DateTime<Utc>,
+    pub issued_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
     pub acquire_method: String,
     pub acquire_host: String,
     pub acquire_remote: Option<String>,

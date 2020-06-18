@@ -4,7 +4,7 @@ use actix_web_validator::{
     Error,
 };
 use crate::api::errors::ApiError;
-use std::rc::Rc;
+use std::sync::Arc;
 use multer::{
     FieldConfig, MulterConfig,
     memory_storage::MemoryStorageBuilder,
@@ -26,8 +26,8 @@ pub fn default_path_config() -> PathConfig {
         }.into())
 }
 
-pub fn avatar_multer_config() -> Rc<MulterConfig> {
-    Rc::new(MulterConfig::new()
+pub fn avatar_multer_config() -> Arc<MulterConfig> {
+    Arc::new(MulterConfig::new()
         .field("avatar", FieldConfig::new()
             .single()
             .accept_file(true)

@@ -1,7 +1,12 @@
 use crate::batch::{batch_values};
 use super::errors::{Error, Result};
 use actix_web::web::block;
-use tokio_postgres::{Client, Statement, types::Type, types::ToSql, IsolationLevel};
+use chrono::{DateTime, Utc};
+use serde::{Serialize, Deserialize};
+use tokio_postgres::{
+    Client, Statement, types::Type, types::ToSql,
+    IsolationLevel, Row,
+};
 
 #[derive(Debug)]
 pub struct UserIdPasswordBlocked {
@@ -27,6 +32,35 @@ pub enum EitherUsernameOrEmail {
     Email(String),
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct User {
+    pub id: i32,
+    pub username: String,
+    pub email: Option<String>,
+    pub nickname: Option<String>,
+    pub avatar: Option<String>,
+    pub avatar128: Option<String>,
+    pub blocked: Option<bool>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl From<&Row> for User {
+    fn from(row: &Row) -> Self {
+        Self {
+            id: row.get("id"),
+            username: row.get("username"),
+            email: row.get("email"),
+            nickname: row.get("nickname"),
+            avatar: row.get("avatar"),
+            avatar128: row.get("avatar128"),
+            blocked: row.get("blocked"),
+            created_at: row.get("created_at"),
+            updated_at: row.get("updated_at"),
+        }
+    }
+}
+
 pub struct Query {
     find_one_from_username_to_id_password_blocked: Statement,
     find_one_from_email_to_id_password_blocked: Statement,
@@ -38,6 +72,7 @@ pub struct Query {
     insert_one: Statement,
     fetch_avatars: Statement,
     update_avatars: Statement,
+    find_one: Statement,
 }
 
 impl Query {
@@ -101,7 +136,13 @@ impl Query {
                 "UPDATE \"user\" SET avatar = $1, avatar128 = $2 \
                 WHERE id = $3 AND NOT deleted",
                 &[Type::VARCHAR, Type::VARCHAR, Type::INT4]
-            ).await.unwrap()
+            ).await.unwrap(),
+            find_one: client.prepare_typed(
+                "SELECT id, username, email, nickname, avatar, avatar128, \
+                        blocked, created_at, updated_at FROM \"user\" \
+                WHERE id = $1 AND NOT deleted LIMIT 1",
+                &[Type::INT4]
+            ).await.unwrap(),
         }
     }
     pub async fn find_one_from_username_to_id_password_blocked(
@@ -288,5 +329,15 @@ impl Query {
             .await?;
         Ok(count)
     }
+    pub async fn find_one(
+        &self, client: &Client, id: i32,
+    ) -> Result<User> {
+        let rows = client
+            .query(&self.find_one, &[&id])
+            .await?;
+        let row = rows
+            .get(0)
+            .ok_or_else(|| Error::UserNotFound)?;
+        Ok(row.into())
+    }
 }
-
