@@ -78,6 +78,22 @@ All fields are required.
 
 ## 2 TODO
 
-- [ ] Multipart
+- [x] Multipart
 - [ ] WebSocket
 - [ ] Captcha
+
+## 3 WebSocket实现
+
+每个服务器启动的时候会启动一个actor（ServerSubscriber）。该actor需要位于可被获取web::Data中，而后被处理WebSocket的Handler获取，并且它支持向其添加和删除订阅的消息以及ConnectionSubscriber（因而是个HashMap<String, Vec<_>>，String是subject）。该actor启动的时候，会创建一个异步死循环，从redis中读取订阅的消息。
+
+消息的格式为JSON。消息支持serialize和deserialize，目前考虑置于/api/messages目录下。最后发送的消息是个集合所有可能消息的大Enum。除此之外，传送的数据还有subject，以及可选的发起uid和发起jti。
+
+每个WebSocket连接会启动一个actor（ConnectionSubscriber），该actor会向ServerSubscriber注册自己。而后当它收到消息的时候就会推送到客户端。此外它还会每隔一段时间发送心跳（30s），如果客户端没有响应心跳超过一段时间就断开连接（1min）。
+
+权限管理方面，每个用户的监听权限，就是那些action为subscribe的权限。这些权限的subject在启动ConnectionSubscriber时被搜集起来并且提交给ServerSubscriber。如果某个权限的后缀是`-self`，那么这部分会被祛除。每个ConnectionSubscriber会存储当前监听的subject列表，uid和jti。如果收到消息有对应subject或者(有带`{subject}-self`且uid与数据中的uid符合)，那么这个消息会被发送出去，其他情况下消息就会被忽略，消息中的subject，uid和jti都发布给客户端。
+
+客户端遇到自己的WebSocket传来的数据是自己的jti的时候可以适当去重。
+
+需要提供一个简单的函数，供所有的API发起消息到redis中，并附带上uid和jti数据。
+
+未来考虑添加一个额外的表：用户<->监听的用户权限。第二个键cascade删除。然后实现用户选择收到某个推送。
