@@ -48,3 +48,9 @@ pub struct Nickname {
     #[validate(length(min = 3, max = 24, message = "should have 3 to 24 chars"))]
     inner: String,
 }
+
+#[derive(Debug, Validate, Serialize, Deserialize, Deref, AsRef, From, Into, Clone)]
+#[serde(transparent)]
+pub struct Id {
+    id: i32,
+}

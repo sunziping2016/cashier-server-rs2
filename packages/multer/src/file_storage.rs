@@ -171,7 +171,7 @@ impl FileStorageBuilder {
                         if let Some(max_size) = max_size {
                             if size > max_size {
                                 if let Err(e) = std::fs::remove_file(&path) {
-                                    error!("failed to remove file {:?}", e);
+                                    error!("failed to remove file {}", e);
                                 }
                                 return Err(MulterError::MaxFieldContentLengthReached {
                                     field: info.name.clone().into(),
@@ -182,7 +182,7 @@ impl FileStorageBuilder {
                             .await
                             .map_err(|e| {
                                 if let Err(e) = std::fs::remove_file(&path) {
-                                    error!("failed to remove file {:?}", e);
+                                    error!("failed to remove file {}", e);
                                 }
                                 MulterError::from(e)
                             })?;
@@ -196,7 +196,7 @@ impl FileStorageBuilder {
                             size,
                         },
                         accepted: false,
-                    }) as Box<dyn FieldResultExtra>)
+                    }) as Box<dyn FieldResultExtra + std::marker::Send>)
                 })
         }.boxed_local())
     }

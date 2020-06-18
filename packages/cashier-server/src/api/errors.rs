@@ -36,7 +36,7 @@ pub enum ApiError {
     UserBlocked,
     #[error(display = "invalid authorization header")]
     InvalidAuthorizationHeader,
-    #[error(display = "invalid token causing by {}", error)]
+    #[error(display = "{}", error)]
     InvalidToken {
         error: String,
     },
@@ -45,7 +45,7 @@ pub enum ApiError {
         subject: String,
         action: String,
     },
-    #[error(display = "invalid json payload causing by {}", error)]
+    #[error(display = "{}", error)]
     JsonPayloadError {
         error: String,
     },
@@ -63,10 +63,16 @@ pub enum ApiError {
     DuplicatedUser {
         field: String,
     },
-    #[error(display = "invalid multipart payload causing by {}", error)]
+    #[error(display = "{}", error)]
     MultipartPayloadError {
         error: String,
     },
+    #[error(display = "{}", error)]
+    AvatarError {
+        error: String,
+    },
+    #[error(display = "cannot find the user")]
+    UserNotFound,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -184,8 +190,10 @@ impl From<ApiError> for ApiErrorWrapper {
             ApiError::JsonPayloadError { .. }
             | ApiError::MultipartPayloadError { .. }
             | ApiError::ValidationError { .. }
-            | ApiError::MissingAuthorizationHeader => 400,
+            | ApiError::MissingAuthorizationHeader
+            | ApiError::AvatarError{ .. } => 400,
             ApiError::DuplicatedUser { .. } => 409,
+            ApiError::UserNotFound => 404,
         };
         ApiErrorWrapper {
             code,
@@ -213,10 +221,13 @@ impl ResponseError for ApiError {
             ApiError::JsonPayloadError { .. }
             | ApiError::MultipartPayloadError { .. }
             | ApiError::ValidationError { .. }
-            | ApiError::MissingAuthorizationHeader =>
+            | ApiError::MissingAuthorizationHeader
+            | ApiError::AvatarError{ .. } =>
                 HttpResponse::BadRequest().json(ApiErrorWrapper::from(self.clone())),
             ApiError::DuplicatedUser { .. } =>
                 HttpResponse::Conflict().json(ApiErrorWrapper::from(self.clone())),
+            ApiError::UserNotFound =>
+                HttpResponse::NotFound().json(ApiErrorWrapper::from(self.clone())),
         }
     }
 }

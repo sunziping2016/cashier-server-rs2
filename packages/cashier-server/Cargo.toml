@@ -5,6 +5,7 @@ authors = ["Sun Ziping <sunziping2016@gmail.com>"]
 edition = "2018"
 
 [dependencies]
+actix-files = "0.2.2"
 actix-multipart = "0.2"
 actix-rt = "1.1"
 actix-web = "2.0"
@@ -16,6 +17,7 @@ derive_more = "0.99.7"
 env_logger = "0.7.1"
 err-derive = "0.2.4"
 futures = "0.3.5"
+image = "0.23.5"
 jsonwebtoken = "7.1.1"
 lazy_static = "1.4.0"
 log = "0.4.8"

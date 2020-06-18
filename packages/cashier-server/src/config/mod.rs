@@ -34,10 +34,18 @@ pub struct InitConfig {
 }
 
 #[derive(Debug, Clone)]
+pub struct MediaConfig {
+    pub root: String,
+    pub url: String,
+    pub serve: bool,
+}
+
+#[derive(Debug, Clone)]
 pub struct StartConfig {
     pub db: String,
     pub redis: String,
     pub bind: String,
+    pub media: MediaConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -47,18 +55,37 @@ pub enum Config {
 }
 
 #[derive(Serialize, Deserialize)]
+pub struct MediaConfigFile {
+    root: Option<String>,
+    url: Option<String>,
+    serve: Option<bool>,
+}
+
+impl MediaConfigFile {
+    pub fn new() -> Self {
+        Self {
+            root: None,
+            url: None,
+            serve: None,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct ConfigFile {
     db: Option<String>,
     redis: Option<String>,
     bind: Option<String>,
+    media: Option<MediaConfigFile>,
 }
 
 impl ConfigFile {
     pub fn new() -> Self {
-        ConfigFile {
+        Self {
             db: None,
             redis: None,
             bind: None,
+            media: None,
         }
     }
 
@@ -104,6 +131,19 @@ impl Config {
                 .value_name("ADDR:PORT")
                 .about("Address to bind")
                 .takes_value(true))
+            .arg(Arg::with_name("media-root")
+                .long("media-root")
+                .value_name("PATH")
+                .about("Path to user-uploaded contents")
+                .takes_value(true))
+            .arg(Arg::with_name("media-url")
+                .long("media-url")
+                .value_name("URL")
+                .about("URL prefix for user-uploaded contents")
+                .takes_value(true))
+            .arg(Arg::with_name("media-serve")
+                .long("media-serve")
+                .about("Serves user-uploaded contents"))
             .subcommand(App::new("init")
                 .about("Initializes all databases")
                 .arg(Arg::with_name("reset")
@@ -129,18 +169,40 @@ impl Config {
         config_file.db = config_file.db.or(matches.value_of("db").map(String::from));
         config_file.redis = config_file.redis.or(matches.value_of("redis").map(String::from));
         config_file.bind = config_file.bind.or(matches.value_of("bind").map(String::from));
+        let mut default_media_config_file = MediaConfigFile::new();
+        let media_config_file = config_file.media.as_mut()
+            .unwrap_or(&mut default_media_config_file);
+        media_config_file.root = media_config_file.root.clone()
+            .or(matches.value_of("media-root").map(String::from));
+        media_config_file.url = media_config_file.url.clone()
+            .or(matches.value_of("media-url").map(String::from));
+        if matches.is_present("media-serve") {
+            media_config_file.serve = Some(true);
+        }
         match matches.subcommand() {
             ("init", Some(sub_matches)) => Ok(Config::Init(InitConfig {
-                db: config_file.db.ok_or_else(|| ConfigError::MissingArgument("database".into()))?,
-                redis: config_file.redis.ok_or_else(|| ConfigError::MissingArgument("redis".into()))?,
+                db: config_file.db
+                    .ok_or_else(|| ConfigError::MissingArgument("database".into()))?,
+                redis: config_file.redis
+                    .ok_or_else(|| ConfigError::MissingArgument("redis".into()))?,
                 reset: sub_matches.is_present("reset"),
                 superuser_username: sub_matches.value_of("superuser-username").map(String::from),
                 superuser_password: sub_matches.value_of("superuser-password").map(String::from),
             })),
             ("start", Some(_)) => Ok(Config::Start(StartConfig {
-                db: config_file.db.ok_or_else(|| ConfigError::MissingArgument("database".into()))?,
-                redis: config_file.redis.ok_or_else(|| ConfigError::MissingArgument("redis".into()))?,
-                bind: config_file.bind.ok_or_else(|| ConfigError::MissingArgument("bind".into()))?,
+                db: config_file.db
+                    .ok_or_else(|| ConfigError::MissingArgument("database".into()))?,
+                redis: config_file.redis
+                    .ok_or_else(|| ConfigError::MissingArgument("redis".into()))?,
+                bind: config_file.bind
+                    .ok_or_else(|| ConfigError::MissingArgument("bind".into()))?,
+                media: MediaConfig {
+                    root: media_config_file.root.clone()
+                        .ok_or_else(|| ConfigError::MissingArgument("media.root".into()))?,
+                    url: media_config_file.url.clone()
+                        .ok_or_else(|| ConfigError::MissingArgument("media.url".into()))?,
+                    serve: media_config_file.serve.contains(&true),
+                }
             })),
             _ => Err(ConfigError::InvalidSubcommand)
         }

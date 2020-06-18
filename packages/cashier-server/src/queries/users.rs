@@ -16,6 +16,12 @@ pub struct PermissionSubjectAction {
     pub action: String,
 }
 
+#[derive(Debug)]
+pub struct UserAvatars {
+    pub avatar: Option<String>,
+    pub avatar128: Option<String>,
+}
+
 pub enum EitherUsernameOrEmail {
     Username(String),
     Email(String),
@@ -30,6 +36,8 @@ pub struct Query {
     find_one_from_username_to_username_email: Statement,
     find_one_from_username_email_to_username_email: Statement,
     insert_one: Statement,
+    fetch_avatars: Statement,
+    update_avatars: Statement,
 }
 
 impl Query {
@@ -84,6 +92,16 @@ impl Query {
                 RETURNING id",
                 &[Type::VARCHAR, Type::VARCHAR, Type::VARCHAR, Type::VARCHAR],
             ).await.unwrap(),
+            fetch_avatars: client.prepare_typed(
+                "SELECT avatar, avatar128 FROM \"user\" \
+                WHERE id = $1 AND NOT deleted LIMIT 1",
+                &[Type::INT4]
+            ).await.unwrap(),
+            update_avatars: client.prepare_typed(
+                "UPDATE \"user\" SET avatar = $1, avatar128 = $2 \
+                WHERE id = $3 AND NOT deleted",
+                &[Type::VARCHAR, Type::VARCHAR, Type::INT4]
+            ).await.unwrap()
         }
     }
     pub async fn find_one_from_username_to_id_password_blocked(
@@ -246,6 +264,29 @@ impl Query {
             return Err(Error::UserBlocked);
         }
         Ok(user.id)
+    }
+    pub async fn fetch_avatars(
+        &self, client: &Client, id: i32,
+    ) -> Result<UserAvatars> {
+        let rows = client
+            .query(&self.fetch_avatars, &[&id])
+            .await?;
+        let row = rows
+            .get(0)
+            .ok_or_else(|| Error::UserNotFound)?;
+        Ok(UserAvatars {
+            avatar: row.get("avatar"),
+            avatar128: row.get("avatar128"),
+        })
+    }
+    pub async fn update_avatars(
+        &self, client: &Client, id: i32,
+        avatar: &Option<String>, avatar128: &Option<String>
+    ) -> Result<u64> {
+        let count = client
+            .execute(&self.update_avatars, &[avatar, avatar128, &id])
+            .await?;
+        Ok(count)
     }
 }
 

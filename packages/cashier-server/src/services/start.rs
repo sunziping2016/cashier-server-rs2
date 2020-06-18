@@ -6,6 +6,7 @@ use crate::{
     config::StartConfig,
     queries::Query,
 };
+use actix_files as fs;
 use actix_web::{
     web, App, HttpServer,
     middleware::Logger,
@@ -41,10 +42,17 @@ pub async fn start(config: &StartConfig) -> Result<()> {
         db: RwLock::from(client),
         query
     });
+    let media_serve = config.media.serve;
+    let media_url = config.media.url.clone();
+    let media_root = config.media.root.clone();
     HttpServer::new(move || {
-        App::new()
+        let mut app = App::new()
             .wrap(Logger::default())
-            .configure(api_v1(&app_data))
+            .configure(api_v1(&app_data));
+        if media_serve {
+            app = app.service(fs::Files::new(&media_url, &media_root))
+        }
+        app
     })
         .bind(&config.bind)?
         .run()

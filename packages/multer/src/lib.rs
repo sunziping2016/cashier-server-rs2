@@ -105,7 +105,7 @@ pub trait FieldResultExtra {
 }
 
 pub type Handler = Box<dyn for<'a> Fn(&'a FieldInfo, &'a mut Field)
-    -> LocalBoxFuture<'a, Result<Box<dyn FieldResultExtra>>>>;
+    -> LocalBoxFuture<'a, Result<Box<dyn FieldResultExtra + std::marker::Send>>>>;
 
 pub struct FieldConfig {
     accept_content_type: Option<HashSet<Mime>>,
@@ -195,7 +195,7 @@ pub struct FieldResult {
     headers: HeaderMap,
     content_type: Mime,
     filename: Option<String>,
-    extra: Box<dyn FieldResultExtra>,
+    extra: Box<dyn FieldResultExtra + std::marker::Send>,
 }
 
 impl FieldResult {
@@ -208,10 +208,10 @@ impl FieldResult {
     pub fn filename(&self) -> &Option<String> {
         &self.filename
     }
-    pub fn extra(&self) -> &Box<dyn FieldResultExtra> {
+    pub fn extra(&self) -> &Box<dyn FieldResultExtra + std::marker::Send> {
         &self.extra
     }
-    pub fn extra_mut(&mut self) -> &mut Box<dyn FieldResultExtra> {
+    pub fn extra_mut(&mut self) -> &mut Box<dyn FieldResultExtra + std::marker::Send> {
         &mut self.extra
     }
 }

@@ -60,7 +60,7 @@ impl MemoryStorageBuilder {
             }
             Ok(Box::new(MemoryResultInfo {
                 data: result,
-            }) as Box<dyn FieldResultExtra>)
+            }) as Box<dyn FieldResultExtra + std::marker::Send>)
         }.boxed_local())
     }
 }
