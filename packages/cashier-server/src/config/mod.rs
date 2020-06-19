@@ -166,16 +166,16 @@ impl Config {
         if let Some(path) = matches.value_of("config") {
             config_file = ConfigFile::load(path)?;
         }
-        config_file.db = config_file.db.or(matches.value_of("db").map(String::from));
-        config_file.redis = config_file.redis.or(matches.value_of("redis").map(String::from));
-        config_file.bind = config_file.bind.or(matches.value_of("bind").map(String::from));
+        config_file.db = matches.value_of("db").map(String::from).or(config_file.db);
+        config_file.redis = matches.value_of("redis").map(String::from).or(config_file.redis);
+        config_file.bind = matches.value_of("bind").map(String::from).or(config_file.bind);
         let mut default_media_config_file = MediaConfigFile::new();
         let media_config_file = config_file.media.as_mut()
             .unwrap_or(&mut default_media_config_file);
-        media_config_file.root = media_config_file.root.clone()
-            .or(matches.value_of("media-root").map(String::from));
-        media_config_file.url = media_config_file.url.clone()
-            .or(matches.value_of("media-url").map(String::from));
+        media_config_file.root = matches.value_of("media-root").map(String::from)
+            .or(media_config_file.root.clone());
+        media_config_file.url = matches.value_of("media-url").map(String::from)
+            .or(media_config_file.url.clone());
         if matches.is_present("media-serve") {
             media_config_file.serve = Some(true);
         }

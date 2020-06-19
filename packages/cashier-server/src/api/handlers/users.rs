@@ -31,6 +31,7 @@ use actix_web::{
     error::BlockingError,
 };
 use actix_web_validator::{ValidatedJson, ValidatedPath};
+use chrono::{DateTime, Utc};
 use image::{
     GenericImageView,
     error::ImageError,
@@ -64,6 +65,7 @@ struct CreateUserRequest {
 #[derive(Debug, Serialize)]
 struct CreateUserResponse {
     id: i32,
+    created_at: DateTime<Utc>,
 }
 
 async fn create_user(
@@ -86,7 +88,7 @@ async fn create_user(
     }
     let email = data.email.as_ref().map(|x| x.clone().into());
     let nickname = data.nickname.as_ref().map(|x| x.clone().into());
-    let id = app_data.query.user
+    let user = app_data.query.user
         .insert_one(&mut *app_data.db.write().await,
                     &data.username[..], &data.password[..], &roles[..],
                     &email, &nickname)
@@ -96,7 +98,8 @@ async fn create_user(
             e => internal_server_error!(e),
         })?;
     respond(CreateUserResponse {
-        id,
+        id: user.id,
+        created_at: user.created_at,
     })
 }
 

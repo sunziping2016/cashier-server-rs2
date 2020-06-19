@@ -16,6 +16,12 @@ pub struct UserIdPasswordBlocked {
 }
 
 #[derive(Debug)]
+pub struct UserIdCreatedAt {
+    pub id: i32,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug)]
 pub struct PermissionSubjectAction {
     pub subject: String,
     pub action: String,
@@ -124,7 +130,7 @@ impl Query {
                 "INSERT INTO \"user\" (username, password, email, nickname, \
                                        created_at, updated_at, deleted) \
                 VALUES ($1, $2, $3, $4, NOW(), NOW(), false) \
-                RETURNING id",
+                RETURNING id, created_at",
                 &[Type::VARCHAR, Type::VARCHAR, Type::VARCHAR, Type::VARCHAR],
             ).await.unwrap(),
             fetch_avatars: client.prepare_typed(
@@ -240,7 +246,7 @@ impl Query {
     pub async fn insert_one(
         &self, client: &mut Client, username: &str, password: &str,
         roles: &[String], email: &Option<String>, nickname: &Option<String>,
-    ) -> Result<i32> {
+    ) -> Result<UserIdCreatedAt> {
         let transaction = client.build_transaction()
             .isolation_level(IsolationLevel::RepeatableRead)
             .start()
@@ -281,7 +287,10 @@ impl Query {
         }
         transaction.commit()
             .await?;
-        Ok(id)
+        Ok(UserIdCreatedAt {
+            id,
+            created_at: user.get("created_at"),
+        })
     }
     pub async fn check_user_valid(
         &self, client: &Client, credit: &EitherUsernameOrEmail, password: &str,

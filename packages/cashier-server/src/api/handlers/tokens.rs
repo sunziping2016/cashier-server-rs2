@@ -17,6 +17,7 @@ use crate::{
         errors::Error as QueryError,
         users::EitherUsernameOrEmail,
     },
+    actors::messages::JwtAcquired,
     internal_server_error,
 };
 use actix_web::{
@@ -27,6 +28,7 @@ use actix_web_validator::ValidatedJson;
 use serde::{Serialize, Deserialize};
 use validator::Validate;
 use validator_derive::Validate;
+use chrono::{DateTime, NaiveDateTime, Utc};
 
 #[derive(Debug, Serialize)]
 struct AcquireTokenResponse {
@@ -60,15 +62,26 @@ async fn acquire_token_by_username(
             _ => { internal_server_error!(e) }
         })?;
     let connection_info = req.connection_info();
-    let (jwt, _) = app_data.query.token
+    let user_agent = req.headers().get("User-Agent")
+        .map(HeaderValue::to_str)
+        .map(std::result::Result::ok)
+        .flatten();
+    let (jwt, claims) = app_data.query.token
         .create_token(&*app_data.db.read().await, uid, "username",
                       connection_info.host(), connection_info.remote(),
-                      req.headers().get("User-Agent")
-                          .map(HeaderValue::to_str)
-                          .map(std::result::Result::ok)
-                          .flatten())
+                      user_agent)
         .await
         .map_err(|e| internal_server_error!(e))?;
+    app_data.send(JwtAcquired(Token {
+        id: claims.jti,
+        user: uid,
+        issued_at: DateTime::<Utc>::from_utc(NaiveDateTime::from_timestamp(claims.iat, 0), Utc),
+        expires_at: DateTime::<Utc>::from_utc(NaiveDateTime::from_timestamp(claims.exp, 0), Utc),
+        acquire_method: "username".into(),
+        acquire_host: connection_info.host().into(),
+        acquire_remote: connection_info.remote().map(String::from),
+        acquire_user_agent: user_agent.map(String::from),
+    }).into(), &auth);
     respond(AcquireTokenResponse {
         jwt,
     })

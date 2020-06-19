@@ -5,10 +5,12 @@ authors = ["Sun Ziping <sunziping2016@gmail.com>"]
 edition = "2018"
 
 [dependencies]
+actix = "0.9.0"
 actix-files = "0.2.2"
 actix-multipart = "0.2"
 actix-rt = "1.1"
 actix-web = "2.0"
+actix-web-actors = "2.0"
 actix-web-validator = "1.0.0"
 bcrypt = "0.8.0"
 chrono = { version = "0.4", features = ["serde"] }
@@ -23,6 +25,7 @@ lazy_static = "1.4.0"
 log = "0.4.8"
 mime = "0.3"
 multer = { path = "../multer" }
+redis = "0.16.0"
 regex = "1"
 rand = "0.7.3"
 rpassword = "4.0.5"

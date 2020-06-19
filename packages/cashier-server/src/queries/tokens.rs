@@ -27,7 +27,7 @@ pub struct JwtClaims {
     pub jti: i32,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Token {
     pub id: i32,
     pub user: i32,
