@@ -5,7 +5,7 @@ use crate::{
     },
     config::StartConfig,
     queries::Query,
-    actors::server_subscriber::ServerSubscriber,
+    webscoket::main_subscriber::MainSubscriber,
 };
 use actix::Actor;
 use actix_files as fs;
@@ -44,7 +44,7 @@ pub async fn start(config: &StartConfig) -> Result<()> {
     let query = Query::new(&client).await;
     let redis_client = redis::Client::open(&config.redis[..])?;
     let redis_connection = redis_client.get_async_connection().await?;
-    let subscriber = ServerSubscriber::new(
+    let subscriber = MainSubscriber::new(
         redis_client.get_async_connection().await?,
         redis_connection.into_pubsub()
     ).start();

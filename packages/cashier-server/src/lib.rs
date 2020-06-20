@@ -6,4 +6,4 @@ pub mod constants;
 pub mod api;
 pub mod queries;
 pub mod batch;
-pub mod actors;
+pub mod webscoket;

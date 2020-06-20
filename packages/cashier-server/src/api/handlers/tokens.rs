@@ -17,7 +17,7 @@ use crate::{
         errors::Error as QueryError,
         users::EitherUsernameOrEmail,
     },
-    actors::messages::JwtAcquired,
+    webscoket::push_messages::JwtAcquired,
     internal_server_error,
 };
 use actix_web::{

@@ -3,6 +3,7 @@ use super::errors::{Error, Result};
 use actix_web::web::block;
 use chrono::{DateTime, Utc};
 use serde::{Serialize, Deserialize};
+use std::collections::{HashSet, HashMap};
 use tokio_postgres::{
     Client, Statement, types::Type, types::ToSql,
     IsolationLevel, Row,
@@ -67,6 +68,37 @@ impl From<&Row> for User {
     }
 }
 
+#[derive(Debug)]
+pub struct UserSubjectTree{
+    map: HashMap<i32, HashSet<String>>,
+    set: HashSet<String>,
+}
+
+impl UserSubjectTree {
+    pub fn new(map: HashMap<i32, HashSet<String>>) -> Self {
+        let set = map.values()
+            .flat_map(|x| x.iter()
+                .map(String::clone))
+            .collect();
+        Self {
+            set,
+            map,
+        }
+    }
+    pub fn get(&self) -> &HashSet<String> {
+        &self.set
+    }
+}
+
+impl Default for UserSubjectTree {
+    fn default() -> Self {
+        Self {
+            map: HashMap::new(),
+            set: HashSet::new(),
+        }
+    }
+}
+
 pub struct Query {
     find_one_from_username_to_id_password_blocked: Statement,
     find_one_from_email_to_id_password_blocked: Statement,
@@ -79,6 +111,8 @@ pub struct Query {
     fetch_avatars: Statement,
     update_avatars: Statement,
     find_one: Statement,
+    fetch_subject_tree: Statement,
+    fetch_default_subject_tree: Statement,
 }
 
 impl Query {
@@ -101,10 +135,10 @@ impl Query {
             ).await.unwrap(),
             fetch_permission: client.prepare_typed(
                 "SELECT DISTINCT subject, action from ( \
-                    SELECT role.id, role.name from user_role, role \
+                    SELECT role.id from user_role, role \
                         WHERE user_role.user = $1 AND user_role.role = role.id AND NOT role.deleted \
                     UNION \
-                    SELECT role.id, role.name from role \
+                    SELECT role.id from role \
                         WHERE role.name = 'default' AND NOT role.deleted \
                 ) as role, role_permission, permission \
                     WHERE role.id = role_permission.role \
@@ -136,7 +170,7 @@ impl Query {
             fetch_avatars: client.prepare_typed(
                 "SELECT avatar, avatar128 FROM \"user\" \
                 WHERE id = $1 AND NOT deleted LIMIT 1",
-                &[Type::INT4]
+                &[Type::INT4],
             ).await.unwrap(),
             update_avatars: client.prepare_typed(
                 "UPDATE \"user\" SET avatar = $1, avatar128 = $2 \
@@ -147,7 +181,26 @@ impl Query {
                 "SELECT id, username, email, nickname, avatar, avatar128, \
                         blocked, created_at, updated_at FROM \"user\" \
                 WHERE id = $1 AND NOT deleted LIMIT 1",
-                &[Type::INT4]
+                &[Type::INT4],
+            ).await.unwrap(),
+            fetch_subject_tree: client.prepare_typed(
+                "SELECT DISTINCT role.id, subject from ( \
+                    SELECT role.id from user_role, role \
+                        WHERE user_role.user = $1 AND user_role.role = role.id AND NOT role.deleted \
+                    UNION \
+                    SELECT role.id from role \
+                        WHERE role.name = 'default' AND NOT role.deleted \
+                ) as role, role_permission, permission \
+                    WHERE role.id = role_permission.role \
+                    AND role_permission.permission = permission.id \
+                    AND permission.action = 'subscribe' AND NOT permission.deleted;",
+                &[Type::INT4],
+            ).await.unwrap(),
+            fetch_default_subject_tree: client.prepare(
+                "SELECT DISTINCT role.id, subject from role, role_permission, permission \
+                WHERE role.name = 'default' AND NOT role.deleted AND role.id = role_permission.role \
+                AND role_permission.permission = permission.id AND permission.action = 'subscribe' \
+                AND NOT permission.deleted"
             ).await.unwrap(),
         }
     }
@@ -348,5 +401,26 @@ impl Query {
             .get(0)
             .ok_or_else(|| Error::UserNotFound)?;
         Ok(row.into())
+    }
+    pub async fn fetch_subject_tree(
+        &self, client: &Client, id: Option<i32>,
+    ) -> Result<UserSubjectTree> {
+        let rows = match id {
+            Some(id) => client
+                .query(&self.fetch_subject_tree, &[&id])
+                .await?,
+            None => client
+                .query(&self.fetch_default_subject_tree, &[])
+                .await?,
+        };
+        let mut tree = HashMap::new();
+        for row in rows {
+            let id: i32 = row.get("id");
+            let subject: String = row.get("subject");
+            tree.entry(id)
+                .or_insert_with(HashSet::new)
+                .insert(subject);
+        }
+        Ok(UserSubjectTree::new(tree))
     }
 }

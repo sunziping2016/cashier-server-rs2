@@ -3,6 +3,10 @@ use actix::Message;
 use chrono::{DateTime, Utc};
 use derive_more::From;
 use serde::{Serialize, Deserialize, Deserializer};
+use std::{
+    convert::Infallible,
+    result::Result,
+};
 
 // From https://stackoverflow.com/questions/44331037/how-can-i-distinguish-between-a-deserialized-field-that-is-missing-and-one-that
 fn deserialize_optional_field<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
@@ -28,6 +32,11 @@ pub struct UserCreated {
     pub roles: Vec<String>,
     pub email: Option<String>,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct UserDeleted {
+    pub id: i32,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -58,19 +67,19 @@ pub struct UserUpdated {
 #[derive(Debug, Serialize, Deserialize, From, Clone)]
 #[serde(tag = "type")]
 #[serde(rename_all = "kebab-case")]
-pub enum InnerAnyMessage {
-    JwtAcquired(JwtAcquired),
-    JwtRevoked(JwtRevoked),
+pub enum InnerPushMessage {
+    TokenAcquired(JwtAcquired),
+    TokenRevoked(JwtRevoked),
     UserCreated(UserCreated),
     UserUpdated(UserUpdated),
+    UserDeleted(UserDeleted),
 }
 
 #[derive(Debug, Serialize, Deserialize, Message, Clone)]
-#[rtype(result = "()")]
-pub struct AnyMessage {
-    // pub subject: String,
+#[rtype(result = "Result<(), Infallible>")]
+pub struct PushMessage {
     pub sender_uid: Option<i32>,
     pub sender_jti: Option<i32>,
-    pub message: InnerAnyMessage,
+    pub message: InnerPushMessage,
     pub created_at: DateTime<Utc>,
 }

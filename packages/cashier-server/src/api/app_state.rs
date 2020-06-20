@@ -1,9 +1,9 @@
 use crate::{
     config::StartConfig,
     queries::Query,
-    actors::{
-        server_subscriber::ServerSubscriber,
-        messages::{AnyMessage, InnerAnyMessage}
+    webscoket::{
+        main_subscriber::MainSubscriber,
+        push_messages::{PushMessage, InnerPushMessage}
     },
     api::extractors::auth::Auth,
 };
@@ -15,15 +15,15 @@ pub struct AppState {
     pub config: StartConfig,
     pub db: RwLock<tokio_postgres::Client>,
     pub query: Query,
-    pub subscriber: Addr<ServerSubscriber>,
+    pub subscriber: Addr<MainSubscriber>,
 }
 
 impl AppState {
-    pub fn send(&self, message: InnerAnyMessage, auth: &Auth) {
+    pub fn send(&self, message: InnerPushMessage, auth: &Auth) {
         let (sender_uid, sender_jti) = auth.claims.as_ref()
             .map(|claims| (Some(claims.uid), Some(claims.jti)))
             .unwrap_or_else(|| (None, None));
-        self.subscriber.do_send(AnyMessage {
+        self.subscriber.do_send(PushMessage {
             // subject,
             sender_uid,
             sender_jti,

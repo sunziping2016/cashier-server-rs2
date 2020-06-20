@@ -1,10 +1,11 @@
 use crate::{
-    actors::{
-        client_subscriber::ClientSubscriber,
-        messages::AnyMessage,
-    },
+    webscoket::push_messages::PushMessage,
 };
-use actix::{Addr, Actor, Message, Handler, Context, AsyncContext, WrapFuture};
+use actix::{
+    Actor, Message, Handler, Context, AsyncContext,
+    WrapFuture, Recipient, ActorContext, ActorFuture, fut,
+    ResponseActFuture,
+};
 use log::{error, debug};
 use redis::{
     aio::{PubSub, Connection},
@@ -12,6 +13,8 @@ use redis::{
 };
 use std::{
     collections::{HashMap, HashSet},
+    convert::Infallible,
+    result::Result,
     sync::Arc,
 };
 use tokio::{
@@ -21,23 +24,23 @@ use tokio::{
 
 #[derive(Message)]
 #[rtype(result = "()")]
-pub struct Subscribe {
-    client: Addr<ClientSubscriber>,
-    subject: HashSet<String>,
+pub struct UpdateSubscribe {
+    pub client: Recipient<PushMessage>,
+    pub subjects: HashSet<String>,
 }
 
 #[derive(Message)]
 #[rtype(result = "()")]
 pub struct RedisMessage(Msg);
 
-pub struct ServerSubscriber {
+pub struct MainSubscriber {
     publisher: Arc<RwLock<Connection>>,
     subscriber: Arc<RwLock<PubSub>>,
-    subject2client: HashMap<String, HashSet<Addr<ClientSubscriber>>>,
-    client2subject: HashMap<Addr<ClientSubscriber>, HashSet<String>>,
+    subject2client: HashMap<String, HashSet<Recipient<PushMessage>>>,
+    client2subject: HashMap<Recipient<PushMessage>, HashSet<String>>,
 }
 
-impl ServerSubscriber {
+impl MainSubscriber {
     pub fn new(publisher: Connection, subscriber: PubSub) -> Self {
         Self {
             publisher: Arc::new(RwLock::new(publisher)),
@@ -48,7 +51,7 @@ impl ServerSubscriber {
     }
 }
 
-impl Actor for ServerSubscriber {
+impl Actor for MainSubscriber {
     type Context = Context<Self>;
 
     fn started(&mut self, ctx: &mut Context<Self>) {
@@ -57,25 +60,32 @@ impl Actor for ServerSubscriber {
         ctx.spawn(async move {
             let mut redis_mut = redis.write().await;
             if let Err(e) = redis_mut.subscribe(crate::constants::CHANNEL_NAME).await {
-                error!("{:?}", e);
+                error!("subscribe redis error: {}", e);
                 return;
             }
             let mut stream = redis_mut.on_message();
             while let Some(msg) = stream.next().await {
-                addr.do_send(RedisMessage(msg));
+                if let Err(e) = addr.try_send(RedisMessage(msg)) {
+                    error!("send RedisMessage error: {}", e);
+                }
             }
-        }.into_actor(self));
+        }
+            .into_actor(self)
+            .then(|_, _, ctx| {
+                ctx.stop();
+                fut::ready(())
+            }));
     }
 }
 
-impl Handler<RedisMessage> for ServerSubscriber {
+impl Handler<RedisMessage> for MainSubscriber {
     type Result = ();
 
     fn handle(&mut self, msg: RedisMessage, _ctx: &mut Context<Self>) -> Self::Result {
         let msg: serde_json::Value = match serde_json::from_slice(msg.0.get_payload_bytes()) {
             Ok(r) => r,
             Err(e) => {
-                error!("server failed to decode message into value {}", e);
+                error!("RedisMessage deserialize to value error: {}", e);
                 return;
             }
         };
@@ -86,37 +96,39 @@ impl Handler<RedisMessage> for ServerSubscriber {
             .flatten()
             .map(String::from);
         let subject = match subject {
-            Some(r) => r,
+            Some(subject) => subject,
             None => {
-                error!("server failed to fetch subject of message");
+                error!("RedisMessage has no subject");
                 return;
             }
         };
-        let msg: AnyMessage = match serde_json::from_value(msg) {
-            Ok(r) => r,
+        let msg: PushMessage = match serde_json::from_value(msg) {
+            Ok(msg) => msg,
             Err(e) => {
-                error!("server failed to decode value into object {}", e);
+                error!("RedisMessage deserialize to PushMessage error: {}", e);
                 return;
             }
         };
-        debug!("receive message of subject \"{}\"", subject);
+        debug!("receive message: subject \"{}\"", subject);
         if let Some(clients) = self.subject2client.get(&subject) {
             for client in clients {
-                client.do_send(msg.clone())
+                if let Err(e) = client.try_send(msg.clone()) {
+                    error!("send PushMessage to client error {}", e);
+                }
             }
         }
     }
 }
 
-impl Handler<Subscribe> for ServerSubscriber {
+impl Handler<UpdateSubscribe> for MainSubscriber {
     type Result = ();
 
-    fn handle(&mut self, msg: Subscribe, _ctx: &mut Context<Self>) -> Self::Result {
+    fn handle(&mut self, msg: UpdateSubscribe, _ctx: &mut Context<Self>) -> Self::Result {
         let empty_subjects = HashSet::new();
         let old_subjects = self.client2subject.get(&msg.client)
             .unwrap_or(&empty_subjects);
         // Remove old
-        let to_remove = old_subjects - &msg.subject;
+        let to_remove = old_subjects - &msg.subjects;
         for subject in to_remove.iter() {
             let clients = self.subject2client.get_mut(subject).unwrap();
             clients.remove(&msg.client);
@@ -124,38 +136,51 @@ impl Handler<Subscribe> for ServerSubscriber {
                 self.subject2client.remove(subject);
             }
         }
-        let to_add = &msg.subject - old_subjects;
+        let to_add = &msg.subjects - old_subjects;
         for subject in to_add.iter() {
             let clients = self.subject2client.entry(subject.clone())
                 .or_insert_with(|| HashSet::new());
             clients.insert(msg.client.clone());
         }
-        if msg.subject.is_empty() {
+        if msg.subjects.is_empty() {
             self.client2subject.remove(&msg.client);
         } else {
-            self.client2subject.insert(msg.client, msg.subject);
+            self.client2subject.insert(msg.client, msg.subjects);
         }
+        // Debug
+        // debug!("subject2client:");
+        // for (subject, clients) in self.subject2client.iter() {
+        //     debug!("  {}: {}", subject, clients.len());
+        // }
+        // debug!("client2subject:");
+        // for (i, (_client, subjects)) in self.client2subject.iter().enumerate() {
+        //     debug!("  {:?}: {}", i, subjects.iter()
+        //         .map(|x| &x[..])
+        //         .collect::<Vec<_>>()
+        //         .join(", "));
+        // }
     }
 }
 
-impl Handler<AnyMessage> for ServerSubscriber {
-    type Result = ();
+impl Handler<PushMessage> for MainSubscriber {
+    type Result = ResponseActFuture<Self, Result<(), Infallible>>;
 
-    fn handle(&mut self, msg: AnyMessage, ctx: &mut Self::Context) -> Self::Result {
-        let msg = match serde_json::to_string(&msg) {
-            Ok(s) => s,
-            Err(e) => {
-                error!("server failed to encode message {}", e);
-                return;
-            }
-        };
+    fn handle(&mut self, msg: PushMessage, _ctx: &mut Self::Context) -> Self::Result {
         let redis = self.publisher.clone();
-        ctx.spawn(async move {
+        Box::new(async move {
+            let msg = match serde_json::to_string(&msg) {
+                Ok(msg) => msg,
+                Err(e) => {
+                    error!("PushMessage serialize error: {}", e);
+                    return Ok(());
+                }
+            };
             let mut redis_mut = redis.write().await;
             if let Err(e) = redis::cmd("PUBLISH").arg(&[crate::constants::CHANNEL_NAME, &msg])
                 .query_async::<Connection, ()>(&mut *redis_mut).await {
-                error!("server failed to send message {}", e);
+                error!("send PushMessage to redis error {}", e);
             }
-        }.into_actor(self));
+            Ok(())
+        }.into_actor(self))
     }
 }

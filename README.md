@@ -94,7 +94,7 @@ All fields are required.
 
 客户端遇到自己的WebSocket传来的数据是自己的jti的时候可以适当去重。
 
-jwt如果被revoke，user如果被删除或block，ClientSubscriber收到这个消息都会断开连接。如果user的roles发生变更，user.roles中的一个role的permissions发生变更，对应的ClientSubscriber都会从数据库中重新加载权限。注意：删除一个被role引用的permission和删除一个被user引用的role是不被允许的。
+jwt如果被revoke，user如果被删除或block，ClientSubscriber收到这个消息都会断开连接。如果user的roles发生变更，user.roles中的一个role的permissions发生变更，对应的ClientSubscriber都会更新权限。注意：删除一个被role引用的permission和删除一个被user引用的role是不被允许的。
 
 需要提供一个简单的函数，供所有的API发起消息到redis中，并附带上uid和jti数据。
 

@@ -46,6 +46,12 @@ pub const PREDEFINED_PERMISSIONS: &[PredefinedPermission] = &[
     PredefinedPermission("user-permission", "read", "Read User's Permission", "Read user's permissions via GET /api/users/:id/permissions"),
     PredefinedPermission("user-permission", "read-default", "Read Default User's Permission", "Read default user's permissions via GET /api/users/default/permissions"),
     PredefinedPermission("user-permission", "read-self", "Read Self User's Permission", "Read user's own permissions via GET /api/users/me/permissions"),
+    // Subjects for token
+    PredefinedPermission("user-created", "subscribe", "Subscribe User-Created", "Subscribe to user created message"),
+    PredefinedPermission("user-updated", "subscribe", "Subscribe User-Updated", "Subscribe to user updated message"),
+    PredefinedPermission("user-deleted", "subscribe", "Subscribe User-Deleted", "Subscribe to user deleted message"),
+    PredefinedPermission("user-updated-self", "subscribe", "Subscribe Self User-Updated", "Subscribe to self user updated message"),
+    PredefinedPermission("user-deleted-self", "subscribe", "Subscribe Self User-Deleted", "Subscribe to self user deleted message"),
     // CRUD for token
     PredefinedPermission("token", "acquire-by-username", "Acquire Token By Username", "Acquire token by username via POST /api/tokens/acquire-by-username"),
     PredefinedPermission("token", "acquire-by-email", "Acquire Token By Email", "Acquire token by email via POST /api/tokens/acquire-by-email"),
@@ -57,7 +63,14 @@ pub const PREDEFINED_PERMISSIONS: &[PredefinedPermission] = &[
     PredefinedPermission("token", "read-single", "Read Single Token", "Read the information of a token via GET /api/tokens/jwt/:jti"),
     PredefinedPermission("token", "revoke-single", "Revoke Single Token", "Revoke one token belong to a user via DELETE /api/tokens/jwt/:jti"),
     PredefinedPermission("token", "read-single-self", "Read Single Self Token", "Read the information of a token via GET /api/tokens/my-jwt/:jti"),
-    PredefinedPermission("token", "revoke-single-self", "Revoke Single Self Token", "Revoke user's own token via DELETE /api/tokens/my-jwt/:jti")
+    PredefinedPermission("token", "revoke-single-self", "Revoke Single Self Token", "Revoke user's own token via DELETE /api/tokens/my-jwt/:jti"),
+    // Subjects for token
+    PredefinedPermission("token-acquired", "subscribe", "Subscribe Token-Acquired", "Subscribe token acquired message"),
+    PredefinedPermission("token-revoked", "subscribe", "Subscribe Token-Revoked", "Subscribe token revoked message"),
+    PredefinedPermission("token-acquired-self", "subscribe", "Subscribe Self Token-Acquired", "Subscribe self token acquired message"),
+    PredefinedPermission("token-revoked-self", "subscribe", "Subscribe Self Token-Revoked", "Subscribe self token revoked message"),
+    // Websocket connect
+    PredefinedPermission("websocket", "connect", "Connect to Websocket", "Connect to the websocket via /api/ws"),
 ];
 
 #[derive(Debug)]
@@ -94,6 +107,9 @@ pub const PREDEFINED_ROLES: &[PredefinedRole] = &[
         ("user", "delete"),
         ("user-role", "read"),
         ("user-permission", "read"),
+        ("user-created", "subscribe"),
+        ("user-updated", "subscribe"),
+        ("user-deleted", "subscribe"),
     ], "Administrator for Users", "Manage users", false),
     PredefinedRole("normal-user", &[
         ("user", "read-self"),
@@ -108,7 +124,11 @@ pub const PREDEFINED_ROLES: &[PredefinedRole] = &[
         ("token", "revoke-self"),
         ("token", "list-self"),
         ("token", "read-single-self"),
-        ("token", "revoke-single-self"),
+        ("user-updated-self", "subscribe"),
+        ("user-deleted-self", "subscribe"),
+        ("revoke-single-self", "subscribe"),
+        ("token-acquired-self", "subscribe"),
+        ("token-revoked-self", "subscribe"),
     ], "Normal User", "Manage users's own information", true),
     PredefinedRole("default", &[
         ("token", "acquire-by-username"),
