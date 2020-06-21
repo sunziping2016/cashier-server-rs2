@@ -8,9 +8,12 @@
 <h2>Connection Status</h2>
 <p id="status-container">waiting...</p>
 <h2>Submit JWT</h2>
-<label for="jwt">JWT</label>
+<label for="jwt-input">JWT</label>
 <input type="text" id="jwt-input">
 <button id="jwt-button">submit</button>
+<h2>Permission</h2>
+<ul id="subject-container">
+</ul>
 <h2>Message received</h2>
 <div id="message-container">
 </div>
@@ -18,6 +21,8 @@
 const uri = (window.location.protocol === 'https:' && 'wss://' || 'ws://') + window.location.host + '/api/v1/ws';
 const connection = new WebSocket(uri);
 const statusContainer = document.getElementById('status-container');
+let available_subjects = [];
+let subjects = new Set();
 connection.onopen = () => {
     console.log('connected!');
     statusContainer.innerText = 'connected'
@@ -35,6 +40,14 @@ connection.onmessage = e => {
     const p = document.createElement("p");
     p.innerText = e.data;
     messageContainer.appendChild(p);
+    const json = JSON.parse(e.data)
+    if (json.type === 'permission-updated') {
+        available_subjects = json.availableSubjects;
+        available_subjects.sort();
+    } else if (json.type === 'subject-updated') {
+        subjects = new Set(json.subjects);
+    }
+    updateSubjects();
 };
 const jwtInput = document.getElementById('jwt-input');
 const jwtButton = document.getElementById('jwt-button');
@@ -48,7 +61,45 @@ jwtButton.addEventListener('click', () => {
             }
         }))
     }
-})
+});
+const subjectContainer = document.getElementById('subject-container');
+function updateSubjects() {
+    while (subjectContainer.lastElementChild)
+        subjectContainer.removeChild(subjectContainer.lastElementChild);
+    for (const subject of available_subjects) {
+        const li = document.createElement('li');
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.checked = subjects.has(subject);
+        input.addEventListener('change', () => {
+            if (connection.readyState === connection.OPEN) {
+                const new_subjects = [...subjects];
+                if (input.checked) {
+                    new_subjects.push(subject);
+                } else {
+                    const index = new_subjects.indexOf(subject);
+                    if (index > -1)
+                        new_subjects.splice(index, 1);
+                }
+                for (const checkbox of subjectContainer.querySelectorAll('input[type=checkbox]')) {
+                    checkbox.disabled = true;
+                }
+                connection.send(JSON.stringify({
+                    requestId: 1,
+                    message: {
+                        type: 'update-subject',
+                        subjects: new_subjects,
+                    }
+                }))
+            }
+        })
+        const label = document.createElement('label');
+        label.innerText = subject;
+        li.appendChild(input);
+        li.appendChild(label);
+        subjectContainer.appendChild(li);
+    }
+}
 </script>
 </body>
 </html>

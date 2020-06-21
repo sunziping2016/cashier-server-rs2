@@ -107,6 +107,8 @@ pub const PREDEFINED_ROLES: &[PredefinedRole] = &[
         ("user", "delete"),
         ("user-role", "read"),
         ("user-permission", "read"),
+        ("token-acquired", "subscribe"),
+        ("token-revoked", "subscribe"),
         ("user-created", "subscribe"),
         ("user-updated", "subscribe"),
         ("user-deleted", "subscribe"),

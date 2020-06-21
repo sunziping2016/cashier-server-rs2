@@ -69,7 +69,7 @@ impl From<&Row> for User {
 }
 
 #[derive(Debug, Hash, Eq, PartialEq, Clone, Serialize, Deserialize)]
-pub struct PermissionTreeItem {
+pub struct PermissionIdSubjectAction {
     pub id: i32,
     pub subject: String,
     pub action: String,
@@ -77,14 +77,14 @@ pub struct PermissionTreeItem {
 
 #[derive(Debug, PartialEq)]
 pub struct PermissionTree {
-    map: HashMap<i32, HashSet<PermissionTreeItem>>,
+    map: HashMap<i32, HashSet<PermissionIdSubjectAction>>,
 }
 
 impl PermissionTree {
-    pub fn new(map: HashMap<i32, HashSet<PermissionTreeItem>>) -> Self {
+    pub fn new(map: HashMap<i32, HashSet<PermissionIdSubjectAction>>) -> Self {
         Self { map }
     }
-    pub fn get(&self) -> HashSet<PermissionTreeItem> {
+    pub fn get(&self) -> HashSet<PermissionIdSubjectAction> {
         self.map.values()
             .flat_map(|x| x.iter())
             .map(|x| x.clone())
@@ -422,7 +422,7 @@ impl Query {
             let id: i32 = row.get("role_id");
             tree.entry(id)
                 .or_insert_with(HashSet::new)
-                .insert(PermissionTreeItem {
+                .insert(PermissionIdSubjectAction {
                     id: row.get("permission_id"),
                     subject: row.get("subject"),
                     action: row.get("action"),

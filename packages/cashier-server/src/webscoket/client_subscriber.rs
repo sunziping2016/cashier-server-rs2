@@ -1,7 +1,7 @@
 use crate::{
     webscoket::{
         main_subscriber::UpdateSubscribe,
-        push_messages::PushMessage,
+        push_messages::{InternalPushMessage, PublicPushMessage},
     },
     api::{
         app_state::AppState,
@@ -13,7 +13,7 @@ use crate::{
         WEBSOCKET_PERMISSION_REFRESH_INTERVAL,
     },
     queries::{
-        users::PermissionTree,
+        users::{PermissionTree, PermissionIdSubjectAction},
         errors::Error as QueryError,
     },
 };
@@ -28,24 +28,29 @@ use derive_more::From;
 use log::{info, error, warn};
 use serde::{Serialize, Deserialize};
 use std::{fmt, collections::HashSet, result::Result, convert::Infallible};
-use crate::queries::users::PermissionTreeItem;
 
 const MUST_INCLUDE_SUBJECT: &[&str] = &[
     "user-updated", // for block
     "user-deleted",
-    "jwt-deleted",
-    "user-role-created",
-    "user-role-deleted",
-    "role-permission-created",
-    "role-permission-deleted",
+    "token-revoked",
+    "user-role-updated",
+    "role-permission-updated",
 ];
 
 const REMOVED_SUFFIX: &str = "-self";
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 struct PermissionUpdatedMessage {
-    permissions: Vec<PermissionTreeItem>,
+    permissions: Vec<PermissionIdSubjectAction>,
+    available_subjects: Vec<String>,
     claims: Option<Claims>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SubjectUpdatedMessage {
+    subjects: Vec<String>
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -63,9 +68,26 @@ enum UpdateTokenResponseStatus {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(tag = "status")]
+#[serde(rename_all = "kebab-case")]
+enum UpdateSubjectResponseStatus {
+    Ok,
+    DisallowedExtraSubject {
+        extra: Vec<String>
+    },
+    InternalError,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct UpdateTokenResponse {
     status: UpdateTokenResponseStatus,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct UpdateSubjectResponse {
+    status: UpdateSubjectResponseStatus,
 }
 
 #[derive(Debug, Serialize, Deserialize, From, Clone)]
@@ -73,7 +95,8 @@ struct UpdateTokenResponse {
 #[serde(rename_all = "kebab-case")]
 enum InnerClientResponseMessage {
     UpdateToken(UpdateTokenResponse),
-    DeliverMessageFailed,
+    UpdateSubject(UpdateSubjectResponse),
+    DeliverFailed,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -84,13 +107,14 @@ struct ClientResponseMessage {
 }
 
 #[derive(Debug, Serialize, Deserialize, From, Message, Clone)]
-#[rtype(result = "()")]
+#[rtype(result = "Result<(), Infallible>")]
 #[serde(tag = "type")]
 #[serde(rename_all = "kebab-case")]
 enum ClientPushMessage {
-    PushMessage(PushMessage),
-    PermissionUpdatedMessage(PermissionUpdatedMessage),
-    ResponseMessage(ClientResponseMessage),
+    Push(PublicPushMessage),
+    PermissionUpdated(PermissionUpdatedMessage),
+    SubjectUpdated(SubjectUpdatedMessage),
+    Response(ClientResponseMessage),
 }
 
 #[derive(Debug, Serialize, Deserialize, Message, Clone)]
@@ -100,11 +124,19 @@ struct UpdateTokenRequest {
     jwt: Option<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Message, Clone)]
+#[rtype(result = "Result<UpdateSubjectResponse, Infallible>")]
+#[serde(rename_all = "camelCase")]
+struct UpdateSubjectRequest {
+    subjects: Vec<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, From, Clone)]
 #[serde(tag = "type")]
 #[serde(rename_all = "kebab-case")]
 enum InnerClientRequestMessage {
     UpdateToken(UpdateTokenRequest),
+    UpdateSubject(UpdateSubjectRequest),
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -125,18 +157,28 @@ struct Claims {
 
 #[derive(Message)]
 #[rtype(result = "Result<(), Infallible>")]
-pub struct FullyReloadPermissions;
+pub struct ReloadPermissionsFromDatabase;
 
 #[derive(Message)]
 #[rtype(result = "Result<(), Infallible>")]
-pub struct ReloadPermissions;
+pub struct ReloadPermissions {
+    new_permissions: PermissionTree,
+}
+
+#[derive(Message)]
+#[rtype(result = "Result<(), Infallible>")]
+pub struct ReloadSubjects {
+    new_subjects: HashSet<String>,
+}
 
 pub struct ClientSubscriber {
     app_data: web::Data<AppState>,
-    permissions: PermissionTree,
     claims: Option<Claims>,
     last_heartbeat: DateTime<Utc>,
     expire_timer: Option<SpawnHandle>,
+    permissions: Option<PermissionTree>,
+    available_subjects: HashSet<String>,
+    subjects: Option<HashSet<String>>,
 }
 
 impl fmt::Debug for ClientSubscriber {
@@ -152,7 +194,6 @@ impl ClientSubscriber {
     pub fn new(app_data: &web::Data<AppState>, auth: &Auth) -> Self {
         Self {
             app_data: app_data.clone(),
-            permissions: PermissionTree::default(),
             claims: auth.claims.as_ref().map(|x| Claims {
                 user_id: x.uid,
                 jwt_id: x.jti,
@@ -160,6 +201,9 @@ impl ClientSubscriber {
             }),
             last_heartbeat: Utc::now(),
             expire_timer: None,
+            permissions: None,
+            available_subjects: HashSet::new(),
+            subjects: None,
         }
     }
 }
@@ -179,81 +223,109 @@ impl Actor for ClientSubscriber {
             }
             ctx.ping(b"");
         });
-        ctx.run_interval(permission_refresh_interval, move |_act, ctx| {
-            if let Err(e) = ctx.address().try_send(FullyReloadPermissions) {
-                error!("refresh FullyReloadSubjectsAndClaims error: {}", e);
-                ctx.stop();
-            }
+        ctx.run_interval(permission_refresh_interval, move |act, ctx| {
+            ctx.spawn(ctx.address().send(ReloadPermissionsFromDatabase)
+                .into_actor(act)
+                .then(|result, _, ctx| {
+                    if let Err(e) = result {
+                        error!("refresh ReloadPermissionsFromDatabase error: {}", e);
+                        ctx.stop();
+                    }
+                    fut::ready(())
+                })
+            );
         });
-        if let Err(e) = ctx.address().try_send(FullyReloadPermissions) {
-            error!("initial FullyReloadSubjectsAndClaims error: {}", e);
-            ctx.stop();
-        }
+        ctx.spawn(ctx.address().send(ReloadPermissionsFromDatabase)
+            .into_actor(self)
+            .then(|result, _, ctx| {
+                if let Err(e) = result {
+                    error!("initial ReloadPermissionsFromDatabase error: {}", e);
+                    ctx.stop();
+                }
+                fut::ready(())
+            })
+        );
     }
 
     fn stopping(&mut self, ctx: &mut Self::Context) -> Running {
-        if let Err(e) = self.app_data.subscriber.try_send(UpdateSubscribe {
+        ctx.spawn(self.app_data.subscriber.send(UpdateSubscribe {
             client: ctx.address().recipient(),
             subjects: HashSet::new(),
-        }) {
-            error!("stopping error: {}", e);
-        }
+        })
+            .into_actor(self)
+            .then(|result, _, _| {
+                if let Err(e) = result {
+                    error!("stopping error: {}", e);
+                }
+                fut::ready(())
+            })
+        );
         Running::Stop
     }
 }
 
-impl Handler<PushMessage> for ClientSubscriber {
+impl Handler<InternalPushMessage> for ClientSubscriber {
     type Result = Result<(), Infallible>;
 
-    fn handle(&mut self, msg: PushMessage, ctx: &mut Self::Context) -> Self::Result {
-        if let Err(e) = ctx.address().try_send::<ClientPushMessage>(msg.into()) {
-            error!("send ClientPushMessage to self error: {}", e)
-        }
-        Ok(())
+    fn handle(&mut self, _msg: InternalPushMessage, _ctx: &mut Self::Context) -> Self::Result {
+        let (_push_message, _new_permissions, _shutdown_connection):
+            (Option<PublicPushMessage>, Option<PermissionTree>, bool) = unimplemented!();
+        // if let Some(push_message) = push_message {
+        //     if let Err(e) = ctx.address().try_send::<ClientPushMessage>(push_message.into()) {
+        //         error!("send ClientPushMessage to self error: {}", e)
+        //     }
+        // }
+        // Ok(())
         // TODO: update permission
     }
 }
 
 impl Handler<ClientPushMessage> for ClientSubscriber {
-    type Result = ();
+    type Result = Result<(), Infallible>;
 
     fn handle(&mut self, msg: ClientPushMessage, ctx: &mut Self::Context) -> Self::Result {
         match serde_json::to_string(&msg) {
             Ok(msg) => ctx.text(msg),
-            Err(e) => error!("ClientPushMessage serialize error: {}", e),
+            Err(e) => error!("serialize ClientPushMessage error: {}", e),
         }
+        Ok(())
     }
 }
 
-impl Handler<FullyReloadPermissions> for ClientSubscriber {
+impl Handler<ReloadPermissionsFromDatabase> for ClientSubscriber {
     type Result = ResponseActFuture<Self, Result<(), Infallible>>;
 
-    fn handle(&mut self, _msg: FullyReloadPermissions, _ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, _msg: ReloadPermissionsFromDatabase, _ctx: &mut Self::Context) -> Self::Result {
         let app_data = self.app_data.clone();
         let user_id = self.claims.as_ref().map(|x| x.user_id);
         Box::new(async move {
             app_data.query.user
-                    .fetch_permission_tree(&*app_data.db.read().await, user_id)
-                    .await
+                .fetch_permission_tree(&*app_data.db.read().await, user_id)
+                .await
         }
             .into_actor(self)
             .then(|permissions, act, ctx| {
                 match permissions {
                     Ok(permissions) => {
-                        if act.permissions != permissions {
-                            act.permissions = permissions;
-                            if let Err(e) = ctx.address().try_send(ReloadPermissions) {
-                                error!("send ReloadSubjectsAndClaims to self error: {}", e);
-                                ctx.stop();
-                            }
-                        }
+                        fut::Either::Left(ctx.address().send(ReloadPermissions {
+                            new_permissions: permissions
+                        })
+                            .into_actor(act)
+                            .then(|result, _, ctx| {
+                                if let Err(e) = result {
+                                    error!("send ReloadPermissions to self error: {}", e);
+                                    ctx.stop();
+                                }
+                                fut::ok(())
+                            })
+                        )
                     }
                     Err(e) => {
-                        error!("fetch UserSubjectTree error: {}", e);
+                        error!("fetch PermissionTree error: {}", e);
                         ctx.stop();
+                        fut::Either::Right(fut::ok(()))
                     }
                 }
-                fut::ok(())
             })
         )
     }
@@ -262,9 +334,59 @@ impl Handler<FullyReloadPermissions> for ClientSubscriber {
 impl Handler<ReloadPermissions> for ClientSubscriber {
     type Result = ResponseActFuture<Self, Result<(), Infallible>>;
 
-    fn handle(&mut self, _msg: ReloadPermissions, ctx: &mut Self::Context) -> Self::Result {
-        let subjects = self.permissions.get_subscribe()
-            .iter()
+    fn handle(&mut self, msg: ReloadPermissions, ctx: &mut Self::Context) -> Self::Result {
+        let permissions = Some(msg.new_permissions);
+        if self.permissions != permissions {
+            self.permissions = permissions;
+            self.available_subjects = self.permissions.as_ref().unwrap().get_subscribe();
+            Box::new(ctx.address().send::<ClientPushMessage>(PermissionUpdatedMessage {
+                permissions: self.permissions.as_ref().unwrap().get().into_iter().collect(),
+                available_subjects: self.available_subjects.iter()
+                    .map(String::clone)
+                    .collect(),
+                claims: self.claims.clone(),
+            }.into())
+                .into_actor(self)
+                .then(|result, act, ctx| {
+                    if let Err(e) = result {
+                        error!("send ClientPushMessage::PermissionUpdatedMessage to self error: {}", e);
+                        ctx.stop();
+                        fut::Either::Left(fut::ok(()))
+                    } else {
+                        let new_subjects = act.subjects.as_ref()
+                            .unwrap_or(&HashSet::new())
+                            .intersection(&act.available_subjects)
+                            .map(String::clone)
+                            .collect();
+                        fut::Either::Right(ctx.address().send(ReloadSubjects {
+                            new_subjects,
+                        })
+                            .into_actor(act)
+                            .then(|result, _, ctx| {
+                                if let Err(e) = result {
+                                    error!("send ReloadSubjects to self error: {}", e);
+                                    ctx.stop();
+                                }
+                                fut::ok(())
+                            })
+                        )
+                    }
+                })
+            )
+        } else {
+            Box::new(fut::ok(()))
+        }
+    }
+}
+
+impl Handler<ReloadSubjects> for ClientSubscriber {
+    type Result = ResponseActFuture<Self, Result<(), Infallible>>;
+
+    fn handle(&mut self, msg: ReloadSubjects, ctx: &mut Self::Context) -> Self::Result {
+        if self.subjects.as_ref() == Some(&msg.new_subjects) {
+            return Box::new(fut::ok(()));
+        }
+        let subjects = msg.new_subjects.iter()
             .map(|x| if x.ends_with(REMOVED_SUFFIX) {
                 String::from(&x[..(x.len() - REMOVED_SUFFIX.len())])
             } else { x.clone() })
@@ -273,51 +395,31 @@ impl Handler<ReloadPermissions> for ClientSubscriber {
                 .map(|x| String::from(*x))
             )
             .collect::<HashSet<_>>();
-        let app_data = self.app_data.clone();
-        let addr = ctx.address();
-        Box::new(async move {
-            app_data.subscriber.send(UpdateSubscribe {
-                client: addr.recipient(),
-                subjects,
-            }).await
-        }
+        Box::new(self.app_data.subscriber.send(UpdateSubscribe {
+            client: ctx.address().recipient(),
+            subjects,
+        })
             .into_actor(self)
             .then(|result, act, ctx| {
-                let updated = match result {
-                    Ok(updated) => updated,
-                    Err(e) => {
-                        error!("send UpdateSubscribe to main error: {}", e);
-                        ctx.stop();
-                        return fut::ok(());
-                    }
-                };
-                if !updated {
-                    info!("ReloadPermissions do nothing");
-                    return fut::ok(());
-                }
-                if let Err(e) = ctx.address().try_send::<ClientPushMessage>(PermissionUpdatedMessage {
-                    permissions: act.permissions.get().into_iter().collect(),
-                    claims: act.claims.clone(),
-                }.into()) {
-                    error!("send ClientPushMessage::SubjectsMessage to self error: {}", e);
+                if let Err(e) = result {
+                    error!("send UpdateSubscribe to main error: {}", e);
                     ctx.stop();
-                    return fut::ok(());
                 }
-                if let Some(ref handle) = act.expire_timer {
-                    ctx.cancel_future(handle.clone());
-                    act.expire_timer = None;
-                }
-                if let Some(Claims { ref expires_at, .. }) = act.claims {
-                    act.expire_timer = Some(ctx.run_later(
-                        (expires_at.clone() - Utc::now()).to_std().unwrap(),
-                        |_act, ctx| {
-                            ctx.stop()
+                act.subjects = Some(msg.new_subjects);
+                ctx.address().send::<ClientPushMessage>(SubjectUpdatedMessage {
+                    subjects: act.subjects.as_ref().unwrap().iter().map(String::clone).collect(),
+                }.into())
+                    .into_actor(act)
+                    .then(|result, _, ctx| {
+                        if let Err(e) = result {
+                            error!("send ClientPushMessage::SubjectUpdatedMessage to self error: {}", e);
+                            ctx.stop();
                         }
-                    ))
-                }
-                fut::ok(())
+                        fut::ok(())
+                    })
             })
         )
+        // Ok(())
     }
 }
 
@@ -344,11 +446,17 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for ClientSubscriber 
             }
             ws::Message::Text(text) => {
                 if let Ok(msg) = serde_json::from_str::<ClientRequestMessage>(&text) {
-                    if let Err(e) = ctx.address().try_send(msg) {
-                        error!("send ClientRequestMessage error: {}", e);
-                    }
+                    ctx.spawn(ctx.address().send(msg)
+                        .into_actor(self)
+                        .then(|result, _, _| {
+                            if let Err(e) = result {
+                                error!("send ClientRequestMessage error: {}", e);
+                            }
+                            fut::ready(())
+                        })
+                    );
                 } else {
-                    warn!("ClientRequestMessage deserialize failed");
+                    warn!("deserialize ClientRequestMessage failed");
                 }
             }
             ws::Message::Close(_)
@@ -367,27 +475,37 @@ impl Handler<ClientRequestMessage> for ClientSubscriber {
         Box::new(async {}
             .into_actor(self)
             .then(move |_, act, ctx| {
-                match msg.message {
-                    InnerClientRequestMessage::UpdateToken(update_token) =>
-                        ctx.address().send(update_token).into_actor(act)
-                            .map(|x, _, _| x.map(|x| InnerClientResponseMessage::from(x.unwrap()))),
-                }
+                let addr = ctx.address();
+                async move {
+                    match msg.message {
+                        InnerClientRequestMessage::UpdateToken(update_token) =>
+                            addr.send(update_token).await
+                                .map(|x| InnerClientResponseMessage::from(x.unwrap())),
+                        InnerClientRequestMessage::UpdateSubject(update_subject) =>
+                            addr.send(update_subject).await
+                                .map(|x| InnerClientResponseMessage::from(x.unwrap())),
+                    }
+                }.into_actor(act)
             })
-            .then(move |x, _act, ctx| {
+            .then(move |x, act, ctx| {
                 let response = ClientResponseMessage {
                     request_id,
                     message: match x {
                         Ok(x) => x,
                         Err(e) => {
                             error!("deliver ClientRequestMessage error: {}", e);
-                            InnerClientResponseMessage::DeliverMessageFailed
+                            InnerClientResponseMessage::DeliverFailed
                         },
                     },
                 };
-                if let Err(e) = ctx.address().try_send::<ClientPushMessage>(response.into()) {
-                    error!("send ClientPushMessage::ClientRequestMessage to self error: {}", e);
-                }
-                fut::ok(())
+                ctx.address().send::<ClientPushMessage>(response.into())
+                    .into_actor(act)
+                    .then(|result, _, _| {
+                        if let Err(e) = result {
+                            error!("send ClientPushMessage::ClientRequestMessage to self error: {}", e);
+                        }
+                        fut::ok(())
+                    })
             })
         )
     }
@@ -421,20 +539,39 @@ impl Handler<UpdateTokenRequest> for ClientSubscriber {
         }
             .into_actor(self)
             .then(|claims: Result<_, QueryError>, act, ctx| {
-                fut::ok(UpdateTokenResponse {
-                    status: match claims {
-                        Ok(claims) => {
-                            act.claims = claims;
-                            match ctx.address().try_send(FullyReloadPermissions) {
-                                Ok(_) => UpdateTokenResponseStatus::Ok,
-                                Err(e) => {
-                                    error!("UpdateToken FullyReloadSubjectsAndClaims error: {}", e);
-                                    ctx.stop();
-                                    UpdateTokenResponseStatus::InternalError
-                                }
-                            }
+                match claims {
+                    Ok(claims) => {
+                        act.claims = claims;
+                        if let Some(ref handle) = act.expire_timer {
+                            ctx.cancel_future(handle.clone());
+                            act.expire_timer = None;
                         }
-                        Err(e) => match e {
+                        if let Some(Claims { ref expires_at, .. }) = act.claims {
+                            act.expire_timer = Some(ctx.run_later(
+                                (expires_at.clone() - Utc::now()).to_std().unwrap(),
+                                |_act, ctx| {
+                                    ctx.stop()
+                                }
+                            ))
+                        }
+                        fut::Either::Left(ctx.address().send(ReloadPermissionsFromDatabase)
+                            .into_actor(act)
+                            .then(|result, _, ctx| {
+                                fut::ok(UpdateTokenResponse {
+                                    status: match result {
+                                        Ok(_) => UpdateTokenResponseStatus::Ok,
+                                        Err(e) => {
+                                            error!("UpdateTokenRequest ReloadPermissions error: {}", e);
+                                            ctx.stop();
+                                            UpdateTokenResponseStatus::InternalError
+                                        }
+                                    }
+                                })
+                            })
+                        )
+                    }
+                    Err(e) => fut::Either::Right(fut::ok(UpdateTokenResponse {
+                        status: match e {
                             QueryError::InvalidToken { error } =>
                                 UpdateTokenResponseStatus::InvalidToken { error },
                             QueryError::TokenNotFound =>
@@ -448,8 +585,47 @@ impl Handler<UpdateTokenRequest> for ClientSubscriber {
                                 UpdateTokenResponseStatus::InternalError
                             }
                         }
-                    }
+                    }))
+                }
+            })
+        )
+    }
+}
+
+impl Handler<UpdateSubjectRequest> for ClientSubscriber {
+    type Result = ResponseActFuture<Self, Result<UpdateSubjectResponse, Infallible>>;
+
+    fn handle(&mut self, msg: UpdateSubjectRequest, _ctx: &mut Self::Context) -> Self::Result {
+        let request_subjects = msg.subjects.into_iter().collect::<HashSet<_>>();
+        let extra_subjects = request_subjects.difference(&self.available_subjects)
+            .map(String::clone)
+            .collect::<Vec<_>>();
+        Box::new(async {}.into_actor(self)
+            .then(move |_, act, ctx| {
+                if !extra_subjects.is_empty() {
+                    return fut::Either::Left(fut::ok(UpdateSubjectResponse {
+                        status: UpdateSubjectResponseStatus::DisallowedExtraSubject {
+                            extra: extra_subjects,
+                        }
+                    }))
+                }
+                fut::Either::Right(ctx.address().send(ReloadSubjects {
+                    new_subjects: request_subjects
                 })
+                    .into_actor(act)
+                    .then(|result, _, ctx| {
+                        fut::ok(UpdateSubjectResponse {
+                            status: match result {
+                                Ok(_) => UpdateSubjectResponseStatus::Ok,
+                                Err(e) => {
+                                    error!("send ReloadSubjects to self for request error: {}", e);
+                                    ctx.stop();
+                                    UpdateSubjectResponseStatus::InternalError
+                                }
+                            }
+                        })
+                    })
+                )
             })
         )
     }

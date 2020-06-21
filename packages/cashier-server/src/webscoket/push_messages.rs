@@ -1,4 +1,7 @@
-use crate::queries::tokens::Token;
+use crate::{
+    queries::tokens::Token,
+    queries::users::PermissionIdSubjectAction,
+};
 use actix::Message;
 use chrono::{DateTime, Utc};
 use derive_more::From;
@@ -17,15 +20,18 @@ fn deserialize_optional_field<'de, T, D>(deserializer: D) -> Result<Option<Optio
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 #[serde(transparent)]
 pub struct JwtAcquired(pub Token);
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct JwtRevoked {
     pub jti: i32,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct UserCreated {
     pub id: i32,
     pub username: String,
@@ -35,11 +41,13 @@ pub struct UserCreated {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct UserDeleted {
     pub id: i32,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct UserUpdated {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
@@ -64,6 +72,28 @@ pub struct UserUpdated {
     pub updated_at: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct InternalUserRoleCreatedItem {
+    pub user: i32,
+    pub role: i32,
+    pub role_permissions: Vec<PermissionIdSubjectAction>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct InternalUserRoleDeletedItem {
+    pub user: i32,
+    pub role: i32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct InternalUserRoleUpdated {
+    created: Vec<InternalUserRoleCreatedItem>,
+    deleted: Vec<InternalUserRoleDeletedItem>,
+}
+
 #[derive(Debug, Serialize, Deserialize, From, Clone)]
 #[serde(tag = "type")]
 #[serde(rename_all = "kebab-case")]
@@ -77,9 +107,30 @@ pub enum InnerPushMessage {
 
 #[derive(Debug, Serialize, Deserialize, Message, Clone)]
 #[rtype(result = "Result<(), Infallible>")]
-pub struct PushMessage {
+pub struct InternalPushMessage {
     pub sender_uid: Option<i32>,
     pub sender_jti: Option<i32>,
     pub message: InnerPushMessage,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize, From, Clone)]
+#[serde(tag = "type")]
+#[serde(rename_all = "kebab-case")]
+pub enum InnerPublicPushMessage {
+    TokenAcquired(JwtAcquired),
+    TokenRevoked(JwtRevoked),
+    UserCreated(UserCreated),
+    UserUpdated(UserUpdated),
+    UserDeleted(UserDeleted),
+    UserRoleUpdated(InternalUserRoleUpdated),
+}
+
+#[derive(Debug, Serialize, Deserialize, Message, Clone)]
+#[rtype(result = "Result<(), Infallible>")]
+pub struct PublicPushMessage {
+    pub sender_uid: Option<i32>,
+    pub sender_jti: Option<i32>,
+    pub message: InnerPublicPushMessage,
     pub created_at: DateTime<Utc>,
 }
