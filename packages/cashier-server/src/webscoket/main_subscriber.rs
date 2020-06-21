@@ -23,7 +23,7 @@ use tokio::{
 };
 
 #[derive(Message)]
-#[rtype(result = "()")]
+#[rtype(result = "bool")]
 pub struct UpdateSubscribe {
     pub client: Recipient<PushMessage>,
     pub subjects: HashSet<String>,
@@ -121,12 +121,15 @@ impl Handler<RedisMessage> for MainSubscriber {
 }
 
 impl Handler<UpdateSubscribe> for MainSubscriber {
-    type Result = ();
+    type Result = bool;
 
     fn handle(&mut self, msg: UpdateSubscribe, _ctx: &mut Context<Self>) -> Self::Result {
         let empty_subjects = HashSet::new();
         let old_subjects = self.client2subject.get(&msg.client)
             .unwrap_or(&empty_subjects);
+        if *old_subjects == msg.subjects {
+            return false;
+        }
         // Remove old
         let to_remove = old_subjects - &msg.subjects;
         for subject in to_remove.iter() {
@@ -159,6 +162,7 @@ impl Handler<UpdateSubscribe> for MainSubscriber {
         //         .collect::<Vec<_>>()
         //         .join(", "));
         // }
+        true
     }
 }
 

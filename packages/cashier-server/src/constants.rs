@@ -11,6 +11,7 @@ pub const AVATAR_FILENAME_LENGTH: usize = 24;
 pub const CHANNEL_NAME: &str = "cashier-server-channel";
 
 lazy_static! {
-    pub static ref WEBSOCKET_HEARTBEAT_INTERVAL: Duration = Duration::seconds(5);
-    pub static ref WEBSOCKET_CLIENT_TIMEOUT: Duration = Duration::seconds(10);
+    pub static ref WEBSOCKET_HEARTBEAT_INTERVAL: Duration = Duration::seconds(30);
+    pub static ref WEBSOCKET_CLIENT_TIMEOUT: Duration = Duration::minutes(1);
+    pub static ref WEBSOCKET_PERMISSION_REFRESH_INTERVAL: Duration = Duration::minutes(2);
 }

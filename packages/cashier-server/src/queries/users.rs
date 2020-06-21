@@ -22,7 +22,7 @@ pub struct UserIdCreatedAt {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Hash, Eq, PartialEq)]
 pub struct PermissionSubjectAction {
     pub subject: String,
     pub action: String,
@@ -68,34 +68,39 @@ impl From<&Row> for User {
     }
 }
 
-#[derive(Debug)]
-pub struct UserSubjectTree{
-    map: HashMap<i32, HashSet<String>>,
-    set: HashSet<String>,
+#[derive(Debug, Hash, Eq, PartialEq, Clone, Serialize, Deserialize)]
+pub struct PermissionTreeItem {
+    pub id: i32,
+    pub subject: String,
+    pub action: String,
 }
 
-impl UserSubjectTree {
-    pub fn new(map: HashMap<i32, HashSet<String>>) -> Self {
-        let set = map.values()
-            .flat_map(|x| x.iter()
-                .map(String::clone))
-            .collect();
-        Self {
-            set,
-            map,
-        }
+#[derive(Debug, PartialEq)]
+pub struct PermissionTree {
+    map: HashMap<i32, HashSet<PermissionTreeItem>>,
+}
+
+impl PermissionTree {
+    pub fn new(map: HashMap<i32, HashSet<PermissionTreeItem>>) -> Self {
+        Self { map }
     }
-    pub fn get(&self) -> &HashSet<String> {
-        &self.set
+    pub fn get(&self) -> HashSet<PermissionTreeItem> {
+        self.map.values()
+            .flat_map(|x| x.iter())
+            .map(|x| x.clone())
+            .collect()
+    }
+    pub fn get_subscribe(&self) -> HashSet<String> {
+        self.get().iter()
+            .filter(|x| x.action == "subscribe")
+            .map(|x| x.subject.clone())
+            .collect()
     }
 }
 
-impl Default for UserSubjectTree {
+impl Default for PermissionTree {
     fn default() -> Self {
-        Self {
-            map: HashMap::new(),
-            set: HashSet::new(),
-        }
+        Self { map: HashMap::new() }
     }
 }
 
@@ -111,8 +116,8 @@ pub struct Query {
     fetch_avatars: Statement,
     update_avatars: Statement,
     find_one: Statement,
-    fetch_subject_tree: Statement,
-    fetch_default_subject_tree: Statement,
+    fetch_permission_tree: Statement,
+    fetch_default_permission_tree: Statement,
 }
 
 impl Query {
@@ -183,8 +188,8 @@ impl Query {
                 WHERE id = $1 AND NOT deleted LIMIT 1",
                 &[Type::INT4],
             ).await.unwrap(),
-            fetch_subject_tree: client.prepare_typed(
-                "SELECT DISTINCT role.id, subject from ( \
+            fetch_permission_tree: client.prepare_typed(
+                "SELECT DISTINCT role.id as role_id, permission.id as permission_id, subject, action from ( \
                     SELECT role.id from user_role, role \
                         WHERE user_role.user = $1 AND user_role.role = role.id AND NOT role.deleted \
                     UNION \
@@ -192,15 +197,14 @@ impl Query {
                         WHERE role.name = 'default' AND NOT role.deleted \
                 ) as role, role_permission, permission \
                     WHERE role.id = role_permission.role \
-                    AND role_permission.permission = permission.id \
-                    AND permission.action = 'subscribe' AND NOT permission.deleted;",
+                    AND role_permission.permission = permission.id AND NOT permission.deleted",
                 &[Type::INT4],
             ).await.unwrap(),
-            fetch_default_subject_tree: client.prepare(
-                "SELECT DISTINCT role.id, subject from role, role_permission, permission \
+            fetch_default_permission_tree: client.prepare(
+                "SELECT DISTINCT role.id as role_id, permission.id as permission_id, subject, action \
+                    from role, role_permission, permission \
                 WHERE role.name = 'default' AND NOT role.deleted AND role.id = role_permission.role \
-                AND role_permission.permission = permission.id AND permission.action = 'subscribe' \
-                AND NOT permission.deleted"
+                AND role_permission.permission = permission.id AND NOT permission.deleted"
             ).await.unwrap(),
         }
     }
@@ -402,25 +406,28 @@ impl Query {
             .ok_or_else(|| Error::UserNotFound)?;
         Ok(row.into())
     }
-    pub async fn fetch_subject_tree(
+    pub async fn fetch_permission_tree(
         &self, client: &Client, id: Option<i32>,
-    ) -> Result<UserSubjectTree> {
+    ) -> Result<PermissionTree> {
         let rows = match id {
             Some(id) => client
-                .query(&self.fetch_subject_tree, &[&id])
+                .query(&self.fetch_permission_tree, &[&id])
                 .await?,
             None => client
-                .query(&self.fetch_default_subject_tree, &[])
+                .query(&self.fetch_default_permission_tree, &[])
                 .await?,
         };
         let mut tree = HashMap::new();
         for row in rows {
-            let id: i32 = row.get("id");
-            let subject: String = row.get("subject");
+            let id: i32 = row.get("role_id");
             tree.entry(id)
                 .or_insert_with(HashSet::new)
-                .insert(subject);
+                .insert(PermissionTreeItem {
+                    id: row.get("permission_id"),
+                    subject: row.get("subject"),
+                    action: row.get("action"),
+                });
         }
-        Ok(UserSubjectTree::new(tree))
+        Ok(PermissionTree::new(tree))
     }
 }

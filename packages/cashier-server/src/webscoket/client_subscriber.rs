@@ -10,9 +10,10 @@ use crate::{
     constants::{
         WEBSOCKET_HEARTBEAT_INTERVAL,
         WEBSOCKET_CLIENT_TIMEOUT,
+        WEBSOCKET_PERMISSION_REFRESH_INTERVAL,
     },
     queries::{
-        users::UserSubjectTree,
+        users::PermissionTree,
         errors::Error as QueryError,
     },
 };
@@ -27,6 +28,7 @@ use derive_more::From;
 use log::{info, error, warn};
 use serde::{Serialize, Deserialize};
 use std::{fmt, collections::HashSet, result::Result, convert::Infallible};
+use crate::queries::users::PermissionTreeItem;
 
 const MUST_INCLUDE_SUBJECT: &[&str] = &[
     "user-updated", // for block
@@ -41,8 +43,8 @@ const MUST_INCLUDE_SUBJECT: &[&str] = &[
 const REMOVED_SUFFIX: &str = "-self";
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-struct SubjectsMessage {
-    subjects: Vec<String>,
+struct PermissionUpdatedMessage {
+    permissions: Vec<PermissionTreeItem>,
     claims: Option<Claims>,
 }
 
@@ -87,7 +89,7 @@ struct ClientResponseMessage {
 #[serde(rename_all = "kebab-case")]
 enum ClientPushMessage {
     PushMessage(PushMessage),
-    SubjectsMessage(SubjectsMessage),
+    PermissionUpdatedMessage(PermissionUpdatedMessage),
     ResponseMessage(ClientResponseMessage),
 }
 
@@ -123,15 +125,15 @@ struct Claims {
 
 #[derive(Message)]
 #[rtype(result = "Result<(), Infallible>")]
-pub struct FullyReloadSubjectsAndClaims;
+pub struct FullyReloadPermissions;
 
 #[derive(Message)]
-#[rtype(result = "()")]
-pub struct ReloadSubjectsAndClaims;
+#[rtype(result = "Result<(), Infallible>")]
+pub struct ReloadPermissions;
 
 pub struct ClientSubscriber {
     app_data: web::Data<AppState>,
-    subjects: UserSubjectTree,
+    permissions: PermissionTree,
     claims: Option<Claims>,
     last_heartbeat: DateTime<Utc>,
     expire_timer: Option<SpawnHandle>,
@@ -150,7 +152,7 @@ impl ClientSubscriber {
     pub fn new(app_data: &web::Data<AppState>, auth: &Auth) -> Self {
         Self {
             app_data: app_data.clone(),
-            subjects: UserSubjectTree::default(),
+            permissions: PermissionTree::default(),
             claims: auth.claims.as_ref().map(|x| Claims {
                 user_id: x.uid,
                 jwt_id: x.jti,
@@ -167,6 +169,7 @@ impl Actor for ClientSubscriber {
 
     fn started(&mut self, ctx: &mut Self::Context) {
         let heartbeat_interval = WEBSOCKET_HEARTBEAT_INTERVAL.to_std().unwrap();
+        let permission_refresh_interval = WEBSOCKET_PERMISSION_REFRESH_INTERVAL.to_std().unwrap();
         let client_timeout = *WEBSOCKET_CLIENT_TIMEOUT;
         ctx.run_interval(heartbeat_interval, move |act, ctx| {
             if Utc::now() - act.last_heartbeat > client_timeout {
@@ -176,7 +179,13 @@ impl Actor for ClientSubscriber {
             }
             ctx.ping(b"");
         });
-        if let Err(e) = ctx.address().try_send(FullyReloadSubjectsAndClaims) {
+        ctx.run_interval(permission_refresh_interval, move |_act, ctx| {
+            if let Err(e) = ctx.address().try_send(FullyReloadPermissions) {
+                error!("refresh FullyReloadSubjectsAndClaims error: {}", e);
+                ctx.stop();
+            }
+        });
+        if let Err(e) = ctx.address().try_send(FullyReloadPermissions) {
             error!("initial FullyReloadSubjectsAndClaims error: {}", e);
             ctx.stop();
         }
@@ -216,25 +225,27 @@ impl Handler<ClientPushMessage> for ClientSubscriber {
     }
 }
 
-impl Handler<FullyReloadSubjectsAndClaims> for ClientSubscriber {
+impl Handler<FullyReloadPermissions> for ClientSubscriber {
     type Result = ResponseActFuture<Self, Result<(), Infallible>>;
 
-    fn handle(&mut self, _msg: FullyReloadSubjectsAndClaims, _ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, _msg: FullyReloadPermissions, _ctx: &mut Self::Context) -> Self::Result {
         let app_data = self.app_data.clone();
         let user_id = self.claims.as_ref().map(|x| x.user_id);
         Box::new(async move {
             app_data.query.user
-                    .fetch_subject_tree(&*app_data.db.read().await, user_id)
+                    .fetch_permission_tree(&*app_data.db.read().await, user_id)
                     .await
         }
             .into_actor(self)
-            .then(|subjects, act, ctx| {
-                match subjects {
-                    Ok(subjects) => {
-                        act.subjects = subjects;
-                        if let Err(e) = ctx.address().try_send(ReloadSubjectsAndClaims) {
-                            error!("send ReloadSubjectsAndClaims to self error: {}", e);
-                            ctx.stop();
+            .then(|permissions, act, ctx| {
+                match permissions {
+                    Ok(permissions) => {
+                        if act.permissions != permissions {
+                            act.permissions = permissions;
+                            if let Err(e) = ctx.address().try_send(ReloadPermissions) {
+                                error!("send ReloadSubjectsAndClaims to self error: {}", e);
+                                ctx.stop();
+                            }
                         }
                     }
                     Err(e) => {
@@ -248,11 +259,11 @@ impl Handler<FullyReloadSubjectsAndClaims> for ClientSubscriber {
     }
 }
 
-impl Handler<ReloadSubjectsAndClaims> for ClientSubscriber {
-    type Result = ();
+impl Handler<ReloadPermissions> for ClientSubscriber {
+    type Result = ResponseActFuture<Self, Result<(), Infallible>>;
 
-    fn handle(&mut self, _msg: ReloadSubjectsAndClaims, ctx: &mut Self::Context) -> Self::Result {
-        let flat_subjects = self.subjects.get()
+    fn handle(&mut self, _msg: ReloadPermissions, ctx: &mut Self::Context) -> Self::Result {
+        let subjects = self.permissions.get_subscribe()
             .iter()
             .map(|x| if x.ends_with(REMOVED_SUFFIX) {
                 String::from(&x[..(x.len() - REMOVED_SUFFIX.len())])
@@ -262,37 +273,51 @@ impl Handler<ReloadSubjectsAndClaims> for ClientSubscriber {
                 .map(|x| String::from(*x))
             )
             .collect::<HashSet<_>>();
-        let vec_subjects = flat_subjects.iter()
-            .map(String::clone)
-            .collect::<Vec<_>>();
-        if let Err(e) = self.app_data.subscriber.try_send(UpdateSubscribe {
-            client: ctx.address().recipient(),
-            subjects: flat_subjects,
-        }) {
-            error!("send UpdateSubscribe to main error: {}", e);
-            ctx.stop();
-            return;
+        let app_data = self.app_data.clone();
+        let addr = ctx.address();
+        Box::new(async move {
+            app_data.subscriber.send(UpdateSubscribe {
+                client: addr.recipient(),
+                subjects,
+            }).await
         }
-        if let Err(e) = ctx.address().try_send::<ClientPushMessage>(SubjectsMessage {
-            subjects: vec_subjects,
-            claims: self.claims.clone(),
-        }.into()) {
-            error!("send ClientPushMessage::SubjectsMessage to self error: {}", e);
-            ctx.stop();
-            return;
-        }
-        if let Some(ref handle) = self.expire_timer {
-            ctx.cancel_future(handle.clone());
-            self.expire_timer = None;
-        }
-        if let Some(Claims { ref expires_at, .. }) = self.claims {
-            self.expire_timer = Some(ctx.run_later(
-                (expires_at.clone() - Utc::now()).to_std().unwrap(),
-                |_act, ctx| {
-                    ctx.stop()
+            .into_actor(self)
+            .then(|result, act, ctx| {
+                let updated = match result {
+                    Ok(updated) => updated,
+                    Err(e) => {
+                        error!("send UpdateSubscribe to main error: {}", e);
+                        ctx.stop();
+                        return fut::ok(());
+                    }
+                };
+                if !updated {
+                    info!("ReloadPermissions do nothing");
+                    return fut::ok(());
                 }
-            ))
-        }
+                if let Err(e) = ctx.address().try_send::<ClientPushMessage>(PermissionUpdatedMessage {
+                    permissions: act.permissions.get().into_iter().collect(),
+                    claims: act.claims.clone(),
+                }.into()) {
+                    error!("send ClientPushMessage::SubjectsMessage to self error: {}", e);
+                    ctx.stop();
+                    return fut::ok(());
+                }
+                if let Some(ref handle) = act.expire_timer {
+                    ctx.cancel_future(handle.clone());
+                    act.expire_timer = None;
+                }
+                if let Some(Claims { ref expires_at, .. }) = act.claims {
+                    act.expire_timer = Some(ctx.run_later(
+                        (expires_at.clone() - Utc::now()).to_std().unwrap(),
+                        |_act, ctx| {
+                            ctx.stop()
+                        }
+                    ))
+                }
+                fut::ok(())
+            })
+        )
     }
 }
 
@@ -400,7 +425,7 @@ impl Handler<UpdateTokenRequest> for ClientSubscriber {
                     status: match claims {
                         Ok(claims) => {
                             act.claims = claims;
-                            match ctx.address().try_send(FullyReloadSubjectsAndClaims) {
+                            match ctx.address().try_send(FullyReloadPermissions) {
                                 Ok(_) => UpdateTokenResponseStatus::Ok,
                                 Err(e) => {
                                     error!("UpdateToken FullyReloadSubjectsAndClaims error: {}", e);
