@@ -3,12 +3,13 @@ use crate::{
     queries::Query,
     webscoket::{
         main_subscriber::MainSubscriber,
-        push_messages::{InternalPushMessage, InnerInternalPushMessage}
+        push_messages::{InternalMessage, InnerInternalMessage}
     },
     api::extractors::auth::Auth,
 };
-use actix::Addr;
+use actix::{Addr, MailboxError};
 use chrono::Utc;
+use std::result::Result;
 use tokio::sync::RwLock;
 
 pub struct AppState {
@@ -19,16 +20,25 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn send<T: Into<InnerInternalPushMessage>>(&self, message: T, auth: &Auth) {
+    pub async fn send<T: Into<InnerInternalMessage>>(
+        &self, message: T, auth: &Auth
+    ) -> Result<(), MailboxError> {
+        self.send_all(vec![message.into()], auth).await
+    }
+    pub async fn send_all(
+        &self, messages: Vec<InnerInternalMessage>, auth: &Auth
+    ) -> Result<(), MailboxError> {
         let (sender_uid, sender_jti) = auth.claims.as_ref()
             .map(|claims| (Some(claims.uid), Some(claims.jti)))
             .unwrap_or_else(|| (None, None));
-        self.subscriber.do_send(InternalPushMessage {
+        self.subscriber.send(InternalMessage {
             // subject,
             sender_uid,
             sender_jti,
-            message: message.into(),
+            messages,
             created_at: Utc::now(),
         })
+            .await
+            .map(|_| ())
     }
 }

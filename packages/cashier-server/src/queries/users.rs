@@ -191,7 +191,8 @@ impl Query {
             ).await.unwrap(),
             update_avatars: client.prepare_typed(
                 "UPDATE \"user\" SET avatar = $1, avatar128 = $2 \
-                WHERE id = $3 AND NOT deleted",
+                WHERE id = $3 AND NOT deleted \
+                RETURNING updated_at",
                 &[Type::VARCHAR, Type::VARCHAR, Type::INT4]
             ).await.unwrap(),
             find_one: client.prepare_typed(
@@ -401,11 +402,14 @@ impl Query {
     pub async fn update_avatars(
         &self, client: &Client, id: i32,
         avatar: &Option<String>, avatar128: &Option<String>
-    ) -> Result<u64> {
-        let count = client
-            .execute(&self.update_avatars, &[avatar, avatar128, &id])
+    ) -> Result<DateTime<Utc>> {
+        let rows = client
+            .query(&self.update_avatars, &[avatar, avatar128, &id])
             .await?;
-        Ok(count)
+        let row = rows
+            .get(0)
+            .ok_or_else(|| Error::UserNotFound)?;
+        Ok(row.get("updated_at"))
     }
     pub async fn find_one(
         &self, client: &Client, id: i32,

@@ -1,12 +1,12 @@
 use crate::{
-    webscoket::push_messages::InternalPushMessage,
+    webscoket::push_messages::InternalMessage,
 };
 use actix::{
     Actor, Message, Handler, Context, AsyncContext,
     WrapFuture, Recipient, ActorContext, ActorFuture, fut,
     ResponseActFuture,
 };
-use log::{error, debug};
+use log::error;
 use redis::{
     aio::{PubSub, Connection},
     Msg,
@@ -25,7 +25,7 @@ use tokio::{
 #[derive(Message)]
 #[rtype(result = "Result<(), Infallible>")]
 pub struct UpdateSubscribe {
-    pub client: Recipient<InternalPushMessage>,
+    pub client: Recipient<InternalMessage>,
     pub subjects: HashSet<String>,
 }
 
@@ -36,8 +36,8 @@ pub struct RedisMessage(Msg);
 pub struct MainSubscriber {
     publisher: Arc<RwLock<Connection>>,
     subscriber: Arc<RwLock<PubSub>>,
-    subject2client: HashMap<String, HashSet<Recipient<InternalPushMessage>>>,
-    client2subject: HashMap<Recipient<InternalPushMessage>, HashSet<String>>,
+    subject2client: HashMap<String, HashSet<Recipient<InternalMessage>>>,
+    client2subject: HashMap<Recipient<InternalMessage>, HashSet<String>>,
 }
 
 impl MainSubscriber {
@@ -82,46 +82,39 @@ impl Handler<RedisMessage> for MainSubscriber {
     type Result = Result<(), Infallible>;
 
     fn handle(&mut self, msg: RedisMessage, ctx: &mut Context<Self>) -> Self::Result {
-        let msg: serde_json::Value = match serde_json::from_slice(msg.0.get_payload_bytes()) {
+        let origin_msg: InternalMessage = match serde_json::from_slice(msg.0.get_payload_bytes()) {
             Ok(r) => r,
             Err(e) => {
-                error!("RedisMessage deserialize to value error: {}", e);
+                error!("RedisMessage deserialize error: {}", e);
                 return Ok(());
             }
         };
-        let subject = msg.get("message")
-            .map(|message| message.get("type"))
-            .flatten()
-            .map(|v| v.as_str())
-            .flatten()
-            .map(String::from);
-        let subject = match subject {
-            Some(subject) => subject,
-            None => {
-                error!("RedisMessage has no subject");
-                return Ok(());
+        let mut deliver_msgs: HashMap<Recipient<InternalMessage>, InternalMessage> = HashMap::new();
+        for msg in origin_msg.messages.iter() {
+            let subject = inflector::cases::kebabcase::to_kebab_case(msg.as_ref());
+            if let Some(clients) = self.subject2client.get(&subject) {
+                for client in clients {
+                    let mailbox = &mut deliver_msgs.entry((*client).clone())
+                        .or_insert_with(|| InternalMessage {
+                            sender_uid: origin_msg.sender_uid.clone(),
+                            sender_jti: origin_msg.sender_jti.clone(),
+                            messages: Vec::new(),
+                            created_at: origin_msg.created_at.clone(),
+                        }).messages;
+                    mailbox.push(msg.clone())
+                }
             }
-        };
-        let msg: InternalPushMessage = match serde_json::from_value(msg) {
-            Ok(msg) => msg,
-            Err(e) => {
-                error!("RedisMessage deserialize to InternalPushMessage error: {}", e);
-                return Ok(());
-            }
-        };
-        debug!("receive message: subject \"{}\"", subject);
-        if let Some(clients) = self.subject2client.get(&subject) {
-            for client in clients {
-                ctx.spawn(client.send(msg.clone())
-                    .into_actor(self)
-                    .then(|result, _, _| {
-                        if let Err(e) = result {
-                            error!("send InternalPushMessage to client error {}", e);
-                        }
-                        fut::ready(())
-                    })
-                );
-            }
+        }
+        for (client, msg) in deliver_msgs.into_iter() {
+            ctx.spawn(client.send(msg.clone())
+                .into_actor(self)
+                .then(|result, _, _| {
+                    if let Err(e) = result {
+                        error!("send InternalMessage to client error {}", e);
+                    }
+                    fut::ready(())
+                })
+            );
         }
         Ok(())
     }
@@ -157,39 +150,39 @@ impl Handler<UpdateSubscribe> for MainSubscriber {
         } else {
             self.client2subject.insert(msg.client, msg.subjects);
         }
-        // Debug
-        debug!("subject2client:");
-        for (subject, clients) in self.subject2client.iter() {
-            debug!("  {}: {}", subject, clients.len());
-        }
-        debug!("client2subject:");
-        for (i, (_client, subjects)) in self.client2subject.iter().enumerate() {
-            debug!("  {:?}: {}", i, subjects.iter()
-                .map(|x| &x[..])
-                .collect::<Vec<_>>()
-                .join(", "));
-        }
+        // // Debug
+        // debug!("subject2client:");
+        // for (subject, clients) in self.subject2client.iter() {
+        //     debug!("  {}: {}", subject, clients.len());
+        // }
+        // debug!("client2subject:");
+        // for (i, (_client, subjects)) in self.client2subject.iter().enumerate() {
+        //     debug!("  {:?}: {}", i, subjects.iter()
+        //         .map(|x| &x[..])
+        //         .collect::<Vec<_>>()
+        //         .join(", "));
+        // }
         Ok(())
     }
 }
 
-impl Handler<InternalPushMessage> for MainSubscriber {
+impl Handler<InternalMessage> for MainSubscriber {
     type Result = ResponseActFuture<Self, Result<(), Infallible>>;
 
-    fn handle(&mut self, msg: InternalPushMessage, _ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, msg: InternalMessage, _ctx: &mut Self::Context) -> Self::Result {
         let redis = self.publisher.clone();
         Box::new(async move {
             let msg = match serde_json::to_string(&msg) {
                 Ok(msg) => msg,
                 Err(e) => {
-                    error!("InternalPushMessage serialize error: {}", e);
+                    error!("InternalMessage serialize error: {}", e);
                     return Ok(());
                 }
             };
             let mut redis_mut = redis.write().await;
             if let Err(e) = redis::cmd("PUBLISH").arg(&[crate::constants::CHANNEL_NAME, &msg])
                 .query_async::<Connection, ()>(&mut *redis_mut).await {
-                error!("send InternalPushMessage to redis error {}", e);
+                error!("send InternalMessage to redis error {}", e);
             }
             Ok(())
         }.into_actor(self))

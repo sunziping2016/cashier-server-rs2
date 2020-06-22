@@ -24,6 +24,7 @@ use crate::{
         errors::Error as QueryError,
         users::User,
     },
+    webscoket::push_messages::{UserCreated, UserUpdated},
     internal_server_error,
 };
 use actix_web::{
@@ -74,7 +75,7 @@ async fn create_user(
     auth: Auth,
 ) -> ApiResult<CreateUserResponse> {
     auth.try_permission("user", "create")?;
-    let uid = auth.claims.ok_or_else(|| ApiError::MissingAuthorizationHeader)?.uid;
+    let uid = auth.claims.as_ref().ok_or_else(|| ApiError::MissingAuthorizationHeader)?.uid;
     let mut roles = data.roles.iter()
         .map(|x| x.clone().into())
         .collect::<Vec<_>>();
@@ -97,6 +98,15 @@ async fn create_user(
             QueryError::DuplicatedUser { field } => ApiError::DuplicatedUser { field },
             e => internal_server_error!(e),
         })?;
+    app_data.send(UserCreated {
+        id: user.id,
+        username: String::from(data.username.clone()),
+        roles,
+        email,
+        created_at: user.created_at,
+    }, &auth)
+        .await
+        .map_err(|e| internal_server_error!(e))?;
     respond(CreateUserResponse {
         id: user.id,
         created_at: user.created_at,
@@ -135,6 +145,7 @@ async fn upload_avatar_impl(
     app_data: web::Data<AppState>,
     uid: i32,
     data: Multer,
+    auth: Auth,
 ) -> ApiResult<UploadAvatarResponse> {
     // Fetch old avatars
     let old_avatars = app_data.query.user
@@ -186,23 +197,29 @@ async fn upload_avatar_impl(
             e => internal_server_error!(e),
         })?;
     // Save new avatars to database
-    if let Err(e) = app_data.query.user
+    let updated_at = match app_data.query.user
         .update_avatars(&*app_data.db.read().await, uid, &Some(avatar.clone()), &avatar128)
         .await {
-        let avatar = avatar.clone();
-        let avatar128 = avatar128.clone();
-        let root = app_data.config.media.root.clone();
-        block(move || {
-            remove_avatar_file(&root, &avatar);
-            if let Some(avatar128) = avatar128 {
-                remove_avatar_file(&root, &avatar128);
-            }
-            Ok::<(), Infallible>(())
-        })
-            .await
-            .map_err(|e| internal_server_error!(e))?;
-        return Err(internal_server_error!(e));
-    }
+        Ok(v) => v,
+        Err(e) => {
+            let avatar = avatar.clone();
+            let avatar128 = avatar128.clone();
+            let root = app_data.config.media.root.clone();
+            block(move || {
+                remove_avatar_file(&root, &avatar);
+                if let Some(avatar128) = avatar128 {
+                    remove_avatar_file(&root, &avatar128);
+                }
+                Ok::<(), Infallible>(())
+            })
+                .await
+                .map_err(|e| internal_server_error!(e))?;
+            return Err(match e {
+                QueryError::UserNotFound => ApiError::UserNotFound,
+                e => internal_server_error!(e),
+            });
+        }
+    };
     let root = &app_data.config.media.root;
     // Remove old avatars
     if let Some(old_avatar) = old_avatars.avatar.as_ref() {
@@ -212,9 +229,24 @@ async fn upload_avatar_impl(
         remove_avatar_file(root, old_avatar128);
     }
     let url = &app_data.config.media.url;
+    let avatar = join_avatar_url(url, &avatar);
+    let avatar128 = avatar128.map(|x| join_avatar_url(url, &x));
+    app_data.send(UserUpdated {
+        id: uid,
+        username: None,
+        email: None,
+        password: None,
+        nickname: None,
+        avatar: Some(Some(avatar.clone())),
+        avatar128: Some(avatar128.clone()),
+        blocked: None,
+        updated_at: Some(updated_at),
+    }, &auth)
+        .await
+        .map_err(|e| internal_server_error!(e))?;
     respond(UploadAvatarResponse {
-        avatar: join_avatar_url(url, &avatar),
-        avatar128: avatar128.map(|x| join_avatar_url(url, &x)),
+        avatar,
+        avatar128,
     })
 }
 
@@ -224,8 +256,8 @@ async fn upload_avatar_for_me(
     auth: Auth,
 ) -> ApiResult<UploadAvatarResponse> {
     auth.try_permission("user-avatar", "update-self")?;
-    let uid = auth.claims.ok_or_else(|| ApiError::MissingAuthorizationHeader)?.uid;
-    upload_avatar_impl(app_data, uid, data).await
+    let uid = auth.claims.as_ref().ok_or_else(|| ApiError::MissingAuthorizationHeader)?.uid;
+    upload_avatar_impl(app_data, uid, data, auth).await
 }
 
 async fn upload_avatar(
@@ -236,7 +268,7 @@ async fn upload_avatar(
 ) -> ApiResult<UploadAvatarResponse> {
     auth.try_permission("user-avatar", "update")?;
     let uid = uid_path.uid.clone().into();
-    upload_avatar_impl(app_data, uid, data).await
+    upload_avatar_impl(app_data, uid, data, auth).await
 }
 
 async fn read_user_impl(

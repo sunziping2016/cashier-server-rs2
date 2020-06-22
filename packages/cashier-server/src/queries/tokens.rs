@@ -39,6 +39,12 @@ pub struct Token {
     pub acquire_user_agent: Option<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TokenIdUser {
+    pub id: i32,
+    pub user: i32,
+}
+
 impl Query {
     pub async fn new(client: &Client) -> Self {
         Self {
@@ -68,7 +74,8 @@ impl Query {
             ).await.unwrap(),
             revoke_tokens_from_user: client.prepare_typed(
                 "UPDATE token SET revoked = true \
-                WHERE \"user\" = $1 AND NOT revoked",
+                WHERE \"user\" = $1 AND NOT revoked \
+                RETURNING id, \"user\"",
                 &[Type::INT4]
             ).await.unwrap(),
         }
@@ -137,10 +144,16 @@ impl Query {
             .collect();
         Ok(results)
     }
-    pub async fn revoke_tokens_from_user(&self, client: &Client, user: i32) -> Result<u64> {
-        let count = client
-            .execute(&self.revoke_tokens_from_user, &[&user])
+    pub async fn revoke_tokens_from_user(&self, client: &Client, user: i32) -> Result<Vec<TokenIdUser>> {
+        let rows = client
+            .query(&self.revoke_tokens_from_user, &[&user])
             .await?;
-        Ok(count)
+        let results = rows.iter()
+            .map(|row| TokenIdUser {
+                id: row.get("id"),
+                user: row.get("user"),
+            })
+            .collect();
+        Ok(results)
     }
 }

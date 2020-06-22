@@ -17,7 +17,7 @@ use crate::{
         errors::Error as QueryError,
         users::EitherUsernameOrEmail,
     },
-    webscoket::push_messages::JwtAcquired,
+    webscoket::push_messages::{TokenAcquired, TokenRevoked},
     internal_server_error,
 };
 use actix_web::{
@@ -43,7 +43,52 @@ pub struct AcquireTokenByUsernameRequest {
     password: Password,
 }
 
-//noinspection RsTypeCheck,RsTypeCheck,RsTypeCheck
+async fn acquire_token_impl_impl(
+    app_data: &web::Data<AppState>,
+    req: &web::HttpRequest,
+    uid: i32,
+    method: &str,
+) -> std::result::Result<(AcquireTokenResponse, TokenAcquired), ApiError> {
+    let connection_info = req.connection_info();
+    let user_agent = req.headers().get("User-Agent")
+        .map(HeaderValue::to_str)
+        .map(std::result::Result::ok)
+        .flatten();
+    let (jwt, claims) = app_data.query.token
+        .create_token(&*app_data.db.read().await, uid, method,
+                      connection_info.host(), connection_info.remote(),
+                      user_agent)
+        .await
+        .map_err(|e| internal_server_error!(e))?;
+    Ok((AcquireTokenResponse {
+        jwt,
+    }, TokenAcquired(Token {
+        id: claims.jti,
+        user: uid,
+        issued_at: DateTime::<Utc>::from_utc(NaiveDateTime::from_timestamp(claims.iat, 0), Utc),
+        expires_at: DateTime::<Utc>::from_utc(NaiveDateTime::from_timestamp(claims.exp, 0), Utc),
+        acquire_method: "username".into(),
+        acquire_host: connection_info.host().into(),
+        acquire_remote: connection_info.remote().map(String::from),
+        acquire_user_agent: user_agent.map(String::from),
+    })))
+}
+
+async fn acquire_token_impl(
+    app_data: &web::Data<AppState>,
+    req: &web::HttpRequest,
+    auth: &Auth,
+    uid: i32,
+    method: &str,
+) -> ApiResult<AcquireTokenResponse> {
+    let (response, msg) = acquire_token_impl_impl(
+        app_data, req, uid, method).await?;
+    app_data.send(msg, auth)
+        .await
+        .map_err(|e| internal_server_error!(e))?;
+    respond(response)
+}
+
 async fn acquire_token_by_username(
     app_data: web::Data<AppState>,
     data: ValidatedJson<AcquireTokenByUsernameRequest>,
@@ -61,30 +106,8 @@ async fn acquire_token_by_username(
             QueryError::UserBlocked => ApiError::UserBlocked,
             _ => { internal_server_error!(e) }
         })?;
-    let connection_info = req.connection_info();
-    let user_agent = req.headers().get("User-Agent")
-        .map(HeaderValue::to_str)
-        .map(std::result::Result::ok)
-        .flatten();
-    let (jwt, claims) = app_data.query.token
-        .create_token(&*app_data.db.read().await, uid, "username",
-                      connection_info.host(), connection_info.remote(),
-                      user_agent)
+    acquire_token_impl(&app_data, &req, &auth, uid, "username")
         .await
-        .map_err(|e| internal_server_error!(e))?;
-    app_data.send(JwtAcquired(Token {
-        id: claims.jti,
-        user: uid,
-        issued_at: DateTime::<Utc>::from_utc(NaiveDateTime::from_timestamp(claims.iat, 0), Utc),
-        expires_at: DateTime::<Utc>::from_utc(NaiveDateTime::from_timestamp(claims.exp, 0), Utc),
-        acquire_method: "username".into(),
-        acquire_host: connection_info.host().into(),
-        acquire_remote: connection_info.remote().map(String::from),
-        acquire_user_agent: user_agent.map(String::from),
-    }), &auth);
-    respond(AcquireTokenResponse {
-        jwt,
-    })
 }
 
 #[derive(Debug, Validate, Deserialize)]
@@ -95,7 +118,6 @@ pub struct AcquireTokenByEmailRequest {
     password: Password,
 }
 
-//noinspection ALL
 async fn acquire_token_by_email(
     app_data: web::Data<AppState>,
     data: ValidatedJson<AcquireTokenByEmailRequest>,
@@ -113,19 +135,7 @@ async fn acquire_token_by_email(
             QueryError::UserBlocked => ApiError::UserBlocked,
             _ => { internal_server_error!(e) }
         })?;
-    let connection_info = req.connection_info();
-    let (jwt, _) = app_data.query.token
-        .create_token(&*app_data.db.read().await, uid, "email",
-                      connection_info.host(), connection_info.remote(),
-                      req.headers().get("User-Agent")
-                          .map(HeaderValue::to_str)
-                          .map(std::result::Result::ok)
-                          .flatten())
-        .await
-        .map_err(|e| internal_server_error!(e))?;
-    respond(AcquireTokenResponse {
-        jwt,
-    })
+    acquire_token_impl(&app_data, &req, &auth, uid, "email").await
 }
 
 async fn resume_token(
@@ -134,24 +144,23 @@ async fn resume_token(
     req: web::HttpRequest,
 ) -> ApiResult<AcquireTokenResponse> {
     auth.try_permission("token", "resume")?;
-    let claims = auth.claims.ok_or_else(|| ApiError::MissingAuthorizationHeader)?;
-    let connection_info = req.connection_info();
+    let claims = auth.claims.as_ref().ok_or_else(|| ApiError::MissingAuthorizationHeader)?;
     app_data.query.token
         .revoke_token(&*app_data.db.read().await, claims.jti)
         .await
         .map_err(|e| internal_server_error!(e))?;
-    let (jwt, _) = app_data.query.token
-        .create_token(&*app_data.db.read().await, claims.uid, "resume",
-                      connection_info.host(), connection_info.remote(),
-                      req.headers().get("User-Agent")
-                          .map(HeaderValue::to_str)
-                          .map(std::result::Result::ok)
-                          .flatten())
+    let (response, msg) = acquire_token_impl_impl(
+        &app_data, &req, claims.uid, "resume").await?;
+    app_data.send_all(vec![
+        TokenRevoked {
+            jti: claims.jti,
+            uid: claims.uid,
+        }.into(),
+        msg.into(),
+    ], &auth)
         .await
         .map_err(|e| internal_server_error!(e))?;
-    respond(AcquireTokenResponse {
-        jwt,
-    })
+    respond(response)
 }
 
 #[derive(Debug, Serialize)]
@@ -164,7 +173,7 @@ async fn list_token_for_me(
     auth: Auth,
 ) -> ApiResult<ListTokenResponse> {
     auth.try_permission("token", "list-self")?;
-    let uid = auth.claims.ok_or_else(|| ApiError::MissingAuthorizationHeader)?.uid;
+    let uid = auth.claims.as_ref().ok_or_else(|| ApiError::MissingAuthorizationHeader)?.uid;
     let tokens = app_data.query.token
         .find_tokens_from_user(&*app_data.db.read().await, uid)
         .await
@@ -176,7 +185,7 @@ async fn list_token_for_me(
 
 #[derive(Debug, Serialize)]
 struct RevokeTokenResponse {
-    count: u64,
+    count: usize,
 }
 
 async fn revoke_token_for_me(
@@ -184,9 +193,21 @@ async fn revoke_token_for_me(
     auth: Auth,
 ) -> ApiResult<RevokeTokenResponse> {
     auth.try_permission("token", "revoke-self")?;
-    let uid = auth.claims.ok_or_else(|| ApiError::MissingAuthorizationHeader)?.uid;
-    let count = app_data.query.token
+    let uid = auth.claims.as_ref().ok_or_else(|| ApiError::MissingAuthorizationHeader)?.uid;
+    let results = app_data.query.token
         .revoke_tokens_from_user(&*app_data.db.read().await, uid)
+        .await
+        .map_err(|e| internal_server_error!(e))?;
+    let count = results.len();
+    app_data.send_all(
+        results.into_iter()
+            .map(|result| TokenRevoked {
+                jti: result.id,
+                uid: result.user,
+            }.into())
+            .collect(),
+        &auth
+    )
         .await
         .map_err(|e| internal_server_error!(e))?;
     respond(RevokeTokenResponse {
