@@ -81,7 +81,7 @@ async fn acquire_token_by_username(
         acquire_host: connection_info.host().into(),
         acquire_remote: connection_info.remote().map(String::from),
         acquire_user_agent: user_agent.map(String::from),
-    }).into(), &auth);
+    }), &auth);
     respond(AcquireTokenResponse {
         jwt,
     })

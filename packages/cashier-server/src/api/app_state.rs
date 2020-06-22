@@ -3,7 +3,7 @@ use crate::{
     queries::Query,
     webscoket::{
         main_subscriber::MainSubscriber,
-        push_messages::{InternalPushMessage, InnerPushMessage}
+        push_messages::{InternalPushMessage, InnerInternalPushMessage}
     },
     api::extractors::auth::Auth,
 };
@@ -19,7 +19,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn send(&self, message: InnerPushMessage, auth: &Auth) {
+    pub fn send<T: Into<InnerInternalPushMessage>>(&self, message: T, auth: &Auth) {
         let (sender_uid, sender_jti) = auth.claims.as_ref()
             .map(|claims| (Some(claims.uid), Some(claims.jti)))
             .unwrap_or_else(|| (None, None));
@@ -27,7 +27,7 @@ impl AppState {
             // subject,
             sender_uid,
             sender_jti,
-            message,
+            message: message.into(),
             created_at: Utc::now(),
         })
     }

@@ -1,7 +1,13 @@
 use crate::{
     webscoket::{
         main_subscriber::UpdateSubscribe,
-        push_messages::{InternalPushMessage, PublicPushMessage},
+        push_messages::{
+            PermissionIdSubjectAction,
+            InternalPushMessage, PublicPushMessage,
+            InnerInternalPushMessage, InnerPublicPushMessage,
+            UserRoleUpdated, UserRoleUpdatedItem,
+            RolePermissionUpdated, RolePermissionUpdatedItem,
+        },
     },
     api::{
         app_state::AppState,
@@ -13,7 +19,7 @@ use crate::{
         WEBSOCKET_PERMISSION_REFRESH_INTERVAL,
     },
     queries::{
-        users::{PermissionTree, PermissionIdSubjectAction},
+        users::{PermissionTree, PermissionSubjectAction},
         errors::Error as QueryError,
     },
 };
@@ -27,7 +33,13 @@ use chrono::{DateTime, Utc, NaiveDateTime};
 use derive_more::From;
 use log::{info, error, warn};
 use serde::{Serialize, Deserialize};
-use std::{fmt, collections::HashSet, result::Result, convert::Infallible};
+use std::{
+    fmt,
+    collections::HashSet,
+    result::Result,
+    convert::Infallible,
+    borrow::Cow,
+};
 
 const MUST_INCLUDE_SUBJECT: &[&str] = &[
     "user-updated", // for block
@@ -206,6 +218,12 @@ impl ClientSubscriber {
             subjects: None,
         }
     }
+    pub fn has_subject(&self, subject: &str) -> bool {
+        self.subjects.as_ref().map(|x| x.contains(subject)).contains(&true)
+    }
+    pub fn is_user(&self, uid: i32) -> bool {
+        self.claims.as_ref().map(|x| x.user_id == uid).contains(&true)
+    }
 }
 
 impl Actor for ClientSubscriber {
@@ -265,18 +283,153 @@ impl Actor for ClientSubscriber {
 }
 
 impl Handler<InternalPushMessage> for ClientSubscriber {
-    type Result = Result<(), Infallible>;
+    type Result = ResponseActFuture<Self, Result<(), Infallible>>;
 
-    fn handle(&mut self, _msg: InternalPushMessage, _ctx: &mut Self::Context) -> Self::Result {
-        let (_push_message, _new_permissions, _shutdown_connection):
-            (Option<PublicPushMessage>, Option<PermissionTree>, bool) = unimplemented!();
-        // if let Some(push_message) = push_message {
-        //     if let Err(e) = ctx.address().try_send::<ClientPushMessage>(push_message.into()) {
-        //         error!("send ClientPushMessage to self error: {}", e)
-        //     }
-        // }
-        // Ok(())
-        // TODO: update permission
+    fn handle(&mut self, msg: InternalPushMessage, ctx: &mut Self::Context) -> Self::Result {
+        let (push_message, new_permissions, shutdown_connection):
+            (Option<InnerPublicPushMessage>, Option<PermissionTree>, bool) = match msg.message {
+            InnerInternalPushMessage::TokenAcquired(msg) => (
+                if self.has_subject("token-acquired") ||
+                    (self.has_subject("token-acquired-self") && self.is_user(msg.0.user)) {
+                    Some(msg.into())
+                } else { None }, None, false),
+            InnerInternalPushMessage::TokenRevoked(msg) => {
+                let uid = msg.uid;
+                (
+                    if self.has_subject("token-revoked") ||
+                        (self.has_subject("token-revoked-self") && self.is_user(uid)) {
+                        Some(msg.into())
+                    } else { None },
+                    None, self.is_user(uid),
+                )
+            }
+            InnerInternalPushMessage::UserCreated(msg) => (
+                if self.has_subject("user-created") { Some(msg.into()) } else { None },
+                None, false),
+            InnerInternalPushMessage::UserUpdated(msg) => {
+                let uid = msg.id;
+                let blocked = msg.blocked.flatten().contains(&true);
+                (
+                    if self.has_subject("user-updated") ||
+                        (self.has_subject("user-updated-self") && self.is_user(uid)) {
+                        Some(msg.into())
+                    } else { None },
+                    None, self.is_user(uid) && blocked,
+                )
+            }
+            InnerInternalPushMessage::UserDeleted(msg) => {
+                let uid = msg.id;
+                (
+                    if self.has_subject("user-deleted") ||
+                        (self.has_subject("user-deleted-self") && self.is_user(uid)) {
+                        Some(msg.into())
+                    } else { None },
+                    None, self.is_user(uid),
+                )
+            }
+            InnerInternalPushMessage::UserRoleUpdated(msg) => {
+                let new_msg = if self.has_subject("user-role-updated") {
+                    Some(UserRoleUpdated {
+                        created: msg.created.iter()
+                            .map(|x| UserRoleUpdatedItem {
+                                user: x.user,
+                                role: x.role,
+                            })
+                            .collect(),
+                        deleted: msg.deleted.clone(),
+                    }.into())
+                } else { None };
+                let new_permissions = self.permissions.as_ref()
+                    .map(|permissions| {
+                        let mut permissions = Cow::Borrowed(permissions);
+                        for item in msg.created.into_iter() {
+                            if self.is_user(item.user) {
+                                permissions.to_mut().add_role(item.role, item.role_permissions
+                                    .into_iter()
+                                    .map(|x| (x.id, PermissionSubjectAction {
+                                        subject: x.subject,
+                                        action: x.action,
+                                    }))
+                                    .collect()
+                                );
+                            }
+                        }
+                        for item in msg.deleted.into_iter() {
+                            if self.is_user(item.user) {
+                                permissions.to_mut().remove_role(item.role);
+                            }
+                        }
+                        match permissions {
+                            Cow::Borrowed(_) => None,
+                            permissions=> Some(permissions.into_owned()),
+                        }
+                    })
+                    .unwrap();
+                (new_msg, new_permissions, false)
+            }
+            InnerInternalPushMessage::RolePermissionUpdated(msg) => {
+                let new_msg = if self.has_subject("role-permission-updated") {
+                    Some(RolePermissionUpdated {
+                        created: msg.created.iter()
+                            .map(|x| RolePermissionUpdatedItem {
+                                role: x.role,
+                                permission: x.permission,
+                            })
+                            .collect(),
+                        deleted: msg.deleted.clone(),
+                    }.into())
+                } else { None };
+                let new_permissions = self.permissions.as_ref()
+                    .map(|permissions| {
+                        let mut permissions = Cow::Borrowed(permissions);
+                        for item in msg.created.into_iter() {
+                            permissions.to_mut().add_permission(item.role, item.permission,
+                                                                item.subject, item.action);
+                        }
+                        for item in msg.deleted.into_iter() {
+                            permissions.to_mut().remove_permission(item.role, item.permission);
+                        }
+                        match permissions {
+                            Cow::Borrowed(_) => None,
+                            permissions=> Some(permissions.into_owned()),
+                        }
+                    })
+                    .unwrap();
+                (new_msg, new_permissions, false)
+            }
+        };
+        Box::new(match push_message {
+            Some(push_message) =>
+                fut::Either::Left(ctx.address().send::<ClientPushMessage>(PublicPushMessage {
+                    sender_uid: msg.sender_uid,
+                    sender_jti: msg.sender_jti,
+                    message: push_message,
+                    created_at: msg.created_at,
+                }.into()).into_actor(self)),
+            None => fut::Either::Right(fut::ok(Ok(()))),
+        }
+            .then(move |result, act, ctx| {
+                if let Err(e) = result {
+                    error!("send ClientPushMessage::PublicPushMessage to self error: {}", e)
+                }
+                match new_permissions {
+                    Some(new_permissions) =>
+                        fut::Either::Left(ctx.address().send(ReloadPermissions {
+                            new_permissions
+                        }).into_actor(act)),
+                    None => fut::Either::Right(fut::ok(Ok(()))),
+                }
+                    .then(move |result, _act, ctx| {
+                        if let Err(e) = result {
+                            error!("send ReloadPermissions to self error: {}", e);
+                            ctx.stop();
+                        } else if shutdown_connection {
+                            ctx.stop();
+                        }
+                        fut::ok(())
+                    })
+            })
+        )
     }
 }
 
@@ -313,7 +466,7 @@ impl Handler<ReloadPermissionsFromDatabase> for ClientSubscriber {
                             .into_actor(act)
                             .then(|result, _, ctx| {
                                 if let Err(e) = result {
-                                    error!("send ReloadPermissions to self error: {}", e);
+                                    error!("send ReloadPermissions from database to self error: {}", e);
                                     ctx.stop();
                                 }
                                 fut::ok(())
@@ -340,7 +493,13 @@ impl Handler<ReloadPermissions> for ClientSubscriber {
             self.permissions = permissions;
             self.available_subjects = self.permissions.as_ref().unwrap().get_subscribe();
             Box::new(ctx.address().send::<ClientPushMessage>(PermissionUpdatedMessage {
-                permissions: self.permissions.as_ref().unwrap().get().into_iter().collect(),
+                permissions: self.permissions.as_ref().unwrap().get().into_iter()
+                    .map(|(k, v)| PermissionIdSubjectAction {
+                        id: k,
+                        subject: v.subject,
+                        action: v.action,
+                    })
+                    .collect(),
                 available_subjects: self.available_subjects.iter()
                     .map(String::clone)
                     .collect(),
@@ -419,7 +578,6 @@ impl Handler<ReloadSubjects> for ClientSubscriber {
                     })
             })
         )
-        // Ok(())
     }
 }
 
@@ -502,7 +660,7 @@ impl Handler<ClientRequestMessage> for ClientSubscriber {
                     .into_actor(act)
                     .then(|result, _, _| {
                         if let Err(e) = result {
-                            error!("send ClientPushMessage::ClientRequestMessage to self error: {}", e);
+                            error!("send ClientPushMessage::ClientResponseMessage to self error: {}", e);
                         }
                         fut::ok(())
                     })

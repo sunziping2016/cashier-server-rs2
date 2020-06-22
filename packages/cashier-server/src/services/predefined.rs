@@ -6,6 +6,15 @@ pub struct PredefinedPermission(
     pub &'static str, // description
 );
 
+#[derive(Debug)]
+pub struct PredefinedRole(
+    pub &'static str, // name
+    pub &'static [(&'static str /* subject */, &'static str /* action */)], // permissions
+    pub &'static str, // displayName
+    pub &'static str, // description
+    pub bool, // whether is acquired by newly registered users
+);
+
 // There exists two special id: default and me. Default is for users who are not logged-in.
 // Me is for user to get own information.
 pub const PREDEFINED_PERMISSIONS: &[PredefinedPermission] = &[
@@ -21,6 +30,10 @@ pub const PREDEFINED_PERMISSIONS: &[PredefinedPermission] = &[
     PredefinedPermission("role", "list", "List Role", "List all the roles matching criteria via GET /api/roles"),
     PredefinedPermission("role", "update", "Update Role", "Update the information of a role via PATCH /api/roles/:id"),
     PredefinedPermission("role", "delete", "Delete Role", "Delete a role via DELETE /api/roles/:id"),
+    // CRUD for role's permissions
+    PredefinedPermission("role-permission", "update", "Update Role's Permission", "Update role's permission via POST /api/roles/:id/permissions"),
+    // Subjects for role's permissions
+    PredefinedPermission("role-permission-updated", "subscribe", "Subscribe Role-Permission-Updated", "Subscribe to role's permission updated message"),
     // CRUD for users
     PredefinedPermission("user", "create", "Create User", "Create a new user via POST /api/users"),
     PredefinedPermission("user", "read", "Read User", "Read the information of a user via GET /api/users/:id"),
@@ -40,8 +53,9 @@ pub const PREDEFINED_PERMISSIONS: &[PredefinedPermission] = &[
     PredefinedPermission("user-avatar", "update", "Update Self User Avatar", "Update user's avatar via POST /api/users/:id/avatar"),
     PredefinedPermission("user-avatar", "update-self", "Update Self User Avatar", "Update user's avatar via POST /api/users/me/avatar"),
     // CRUD for user's role
-    PredefinedPermission("user-role", "read", "Read User's Role", "Read user's roles via GET /api/users/:id/roles"),
-    PredefinedPermission("user-role", "read-self", "Read Self User's Role", "Read user's own roles via GET /api/users/me/roles"),
+    PredefinedPermission("user-role", "update", "Update User's Role", "Update user's roles via POST /api/users/:id/roles"),
+    // Subjects for user's roles
+    PredefinedPermission("user-role-updated", "subscribe", "Subscribe User-Role-Updated", "Subscribe to user's role updated message"),
     // CRUD for user's permission
     PredefinedPermission("user-permission", "read", "Read User's Permission", "Read user's permissions via GET /api/users/:id/permissions"),
     PredefinedPermission("user-permission", "read-default", "Read Default User's Permission", "Read default user's permissions via GET /api/users/default/permissions"),
@@ -73,15 +87,6 @@ pub const PREDEFINED_PERMISSIONS: &[PredefinedPermission] = &[
     PredefinedPermission("websocket", "connect", "Connect to Websocket", "Connect to the websocket via /api/ws"),
 ];
 
-#[derive(Debug)]
-pub struct PredefinedRole(
-    pub &'static str, // name
-    pub &'static [(&'static str /* subject */, &'static str /* action */)], // permissions
-    pub &'static str, // displayName
-    pub &'static str, // description
-    pub bool, // whether is acquired by newly registered users
-);
-
 pub const PREDEFINED_ROLES: &[PredefinedRole] = &[
     PredefinedRole("permission-admin", &[
         ("permission", "read"),
@@ -105,7 +110,6 @@ pub const PREDEFINED_ROLES: &[PredefinedRole] = &[
         ("user-password", "update"),
         ("user-avatar", "update"),
         ("user", "delete"),
-        ("user-role", "read"),
         ("user-permission", "read"),
         ("token-acquired", "subscribe"),
         ("token-revoked", "subscribe"),
@@ -120,7 +124,6 @@ pub const PREDEFINED_ROLES: &[PredefinedRole] = &[
         ("user-public", "list"),
         ("user-password", "update-self"),
         ("user-avatar", "update-self"),
-        ("user-role", "read-self"),
         ("user-permission", "read-self"),
         ("token", "resume"),
         ("token", "revoke-self"),

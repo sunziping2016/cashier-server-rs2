@@ -22,7 +22,7 @@ pub struct UserIdCreatedAt {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Hash, Eq, PartialEq)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub struct PermissionSubjectAction {
     pub subject: String,
     pub action: String,
@@ -68,33 +68,45 @@ impl From<&Row> for User {
     }
 }
 
-#[derive(Debug, Hash, Eq, PartialEq, Clone, Serialize, Deserialize)]
-pub struct PermissionIdSubjectAction {
-    pub id: i32,
-    pub subject: String,
-    pub action: String,
-}
-
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct PermissionTree {
-    map: HashMap<i32, HashSet<PermissionIdSubjectAction>>,
+    map: HashMap<i32, HashMap<i32, PermissionSubjectAction>>,
 }
 
 impl PermissionTree {
-    pub fn new(map: HashMap<i32, HashSet<PermissionIdSubjectAction>>) -> Self {
+    pub fn new(map: HashMap<i32, HashMap<i32, PermissionSubjectAction>>) -> Self {
         Self { map }
     }
-    pub fn get(&self) -> HashSet<PermissionIdSubjectAction> {
+    pub fn get(&self) -> HashMap<i32, PermissionSubjectAction> {
         self.map.values()
             .flat_map(|x| x.iter())
-            .map(|x| x.clone())
+            .map(|x| (x.0.to_owned(), x.1.to_owned()))
             .collect()
     }
     pub fn get_subscribe(&self) -> HashSet<String> {
-        self.get().iter()
+        self.get().values()
             .filter(|x| x.action == "subscribe")
             .map(|x| x.subject.clone())
             .collect()
+    }
+    pub fn add_role(&mut self, role: i32, permissions: HashMap<i32, PermissionSubjectAction>) {
+        self.map.insert(role, permissions);
+    }
+    pub fn remove_role(&mut self, role: i32) {
+        self.map.remove(&role);
+    }
+    pub fn add_permission(&mut self, role: i32, permission: i32, subject: String, action: String) {
+        if let Some(permissions) = self.map.get_mut(&role) {
+            permissions.insert(permission, PermissionSubjectAction {
+                subject,
+                action,
+            });
+        }
+    }
+    pub fn remove_permission(&mut self, role: i32, permission: i32) {
+        if let Some(permissions) = self.map.get_mut(&role) {
+            permissions.remove(&permission);
+        }
     }
 }
 
@@ -421,9 +433,8 @@ impl Query {
         for row in rows {
             let id: i32 = row.get("role_id");
             tree.entry(id)
-                .or_insert_with(HashSet::new)
-                .insert(PermissionIdSubjectAction {
-                    id: row.get("permission_id"),
+                .or_insert_with(HashMap::new)
+                .insert(row.get("permission_id"), PermissionSubjectAction {
                     subject: row.get("subject"),
                     action: row.get("action"),
                 });
