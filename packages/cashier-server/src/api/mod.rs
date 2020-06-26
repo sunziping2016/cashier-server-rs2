@@ -5,11 +5,8 @@ pub mod extractors;
 pub mod fields;
 
 use crate::{
-    webscoket::client_subscriber::ClientSubscriber,
-    api::{
-        app_state::AppState,
-        extractors::auth::Auth,
-    },
+    websocket::client_subscriber::ClientSubscriber,
+    api::app_state::AppState,
 };
 use actix_web::{web, HttpResponse, Error, HttpRequest};
 use actix_web_actors::ws;
@@ -18,12 +15,10 @@ async fn websocket(
     req: HttpRequest,
     stream: web::Payload,
     app_data: web::Data<AppState>,
-    auth: Auth, // In fact, browsers do not support carry a header in websocket
 ) -> Result<HttpResponse, Error> {
     ws::start(
         ClientSubscriber::new(
             &app_data,
-            &auth,
         ),
         &req,
         stream,

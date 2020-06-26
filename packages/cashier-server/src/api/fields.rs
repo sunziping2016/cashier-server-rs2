@@ -4,6 +4,7 @@ use regex::Regex;
 use serde::{Serialize, Deserialize};
 use validator::Validate;
 use validator_derive::Validate;
+use crate::queries::users::{UserAccessLevel, RoleAccessLevel, PermissionAccessLevel};
 
 lazy_static! {
     pub static ref USERNAME_REGEX: Regex = Regex::new(r"(?i)^[a-z\d_-]*$").unwrap();
@@ -53,4 +54,22 @@ pub struct Nickname {
 #[serde(transparent)]
 pub struct Id {
     id: i32,
+}
+
+#[derive(Debug, Validate, Serialize, Deserialize, Deref, AsRef, From, Into, Clone)]
+#[serde(transparent)]
+pub struct PopulateUser {
+    level: UserAccessLevel,
+}
+
+#[derive(Debug, Validate, Serialize, Deserialize, Deref, AsRef, From, Into, Clone)]
+#[serde(transparent)]
+pub struct PopulateRole {
+    level: RoleAccessLevel,
+}
+
+#[derive(Debug, Validate, Serialize, Deserialize, Deref, AsRef, From, Into, Clone)]
+#[serde(transparent)]
+pub struct PopulatePermission {
+    level: PermissionAccessLevel,
 }

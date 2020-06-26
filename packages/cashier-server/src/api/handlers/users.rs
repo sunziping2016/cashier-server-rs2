@@ -18,20 +18,26 @@ use crate::{
             RoleName,
             Nickname,
             Id,
+            PopulateUser,
+            PopulateRole,
+            PopulatePermission,
         },
     },
     queries::{
         errors::Error as QueryError,
-        users::User,
+        users::{
+            UserAccessLevel, RoleAccessLevel, PermissionAccessLevel,
+            User, Role, Permission,
+        },
     },
-    webscoket::push_messages::{UserCreated, UserUpdated},
+    websocket::push_messages::{UserCreated, UserUpdated},
     internal_server_error,
 };
 use actix_web::{
     web::{self, block},
     error::BlockingError,
 };
-use actix_web_validator::{ValidatedJson, ValidatedPath};
+use actix_web_validator::{ValidatedJson, ValidatedPath, ValidatedQuery};
 use chrono::{DateTime, Utc};
 use image::{
     GenericImageView,
@@ -271,40 +277,113 @@ async fn upload_avatar(
     upload_avatar_impl(app_data, uid, data, auth).await
 }
 
+#[derive(Deserialize, Validate, Debug)]
+struct ReadUserQuery {
+    #[serde(flatten, default)]
+    populate_user: Option<PopulateUser>,
+    #[serde(flatten, default)]
+    populate_role: Option<PopulateRole>,
+    #[serde(flatten, default)]
+    populate_permission: Option<PopulatePermission>,
+}
+
+struct ReadUserQueryDecoded {
+    populate_user: UserAccessLevel,
+    populate_role: Option<RoleAccessLevel>,
+    populate_permission: Option<PermissionAccessLevel>,
+}
+
+impl From<ReadUserQuery> for ReadUserQueryDecoded {
+    fn from(request: ReadUserQuery) -> Self {
+        Self {
+            populate_user: request.populate_user.clone()
+                .map(|x| UserAccessLevel::from(x))
+                .unwrap_or(UserAccessLevel::WithoutRoles),
+            populate_role: request.populate_role.clone()
+                .map(|x| RoleAccessLevel::from(x)),
+            populate_permission: request.populate_permission.clone()
+                .map(|x| PermissionAccessLevel::from(x)),
+        }
+    }
+}
+
+#[derive(Serialize, Debug)]
+struct ReadUserResponse {
+    user: User,
+    roles: Vec<Role>,
+    permissions: Vec<Permission>,
+}
+
 async fn read_user_impl(
     app_data: web::Data<AppState>,
+    request: ReadUserQueryDecoded,
     uid: i32,
-) -> ApiResult<User> {
-    let mut user = app_data.query.user
-        .find_one(&*app_data.db.read().await, uid)
+) -> ApiResult<ReadUserResponse> {
+    let (mut user, roles, permissions) = app_data.query.user
+        .find_one_with_permissions_and_roles(
+            &mut *app_data.db.write().await, uid, request.populate_user,
+            request.populate_role, request.populate_permission,
+        )
         .await
         .map_err(|err| match err {
             QueryError::UserNotFound => ApiError::UserNotFound,
             e => internal_server_error!(e),
         })?;
     let media_url = &app_data.config.media.url;
-    user.avatar = user.avatar.as_ref().map(|x| join_avatar_url(media_url, x));
-    user.avatar128 = user.avatar128.as_ref().map(|x| join_avatar_url(media_url, x));
-    respond(user)
+    user.map_avatars(|x| join_avatar_url(media_url, x));
+    respond(ReadUserResponse {
+        user,
+        roles,
+        permissions,
+    })
 }
 
 async fn read_user_for_me(
     app_data: web::Data<AppState>,
+    request: ValidatedQuery<ReadUserQuery>,
     auth: Auth,
-) -> ApiResult<User> {
-    auth.try_permission("user", "read-self")?;
+) -> ApiResult<ReadUserResponse> {
+    let request: ReadUserQueryDecoded = request.into_inner().into();
+    match request.populate_user {
+        UserAccessLevel::All => auth.try_permission("user", "read")?,
+        UserAccessLevel::WithoutRoles | UserAccessLevel::Public =>
+            if !auth.has_permission("user", "read") {
+                auth.try_permission("user", "read-self")?;
+            },
+    }
+    if request.populate_role.is_some() {
+        auth.try_permission("role", "read")?;
+    }
+    if request.populate_permission.is_some() {
+        auth.try_permission("permission", "read")?;
+    }
     let uid = auth.claims.ok_or_else(|| ApiError::MissingAuthorizationHeader)?.uid;
-    read_user_impl(app_data, uid).await
+    read_user_impl(app_data, request, uid).await
 }
 
 async fn read_user(
     app_data: web::Data<AppState>,
+    request: ValidatedQuery<ReadUserQuery>,
     uid_path: ValidatedPath<UidPath>,
     auth: Auth,
-) -> ApiResult<User> {
-    auth.try_permission("user", "read")?;
+) -> ApiResult<ReadUserResponse> {
+    let request: ReadUserQueryDecoded = request.into_inner().into();
+    match request.populate_user {
+        UserAccessLevel::All | UserAccessLevel::WithoutRoles =>
+            auth.try_permission("user", "read")?,
+        UserAccessLevel::Public =>
+            if !auth.has_permission("user", "read") {
+                auth.try_permission("user-public", "read")?;
+            }
+    }
+    if request.populate_role.is_some() {
+        auth.try_permission("role", "read")?;
+    }
+    if request.populate_permission.is_some() {
+        auth.try_permission("permission", "read")?;
+    }
     let uid = uid_path.uid.clone().into();
-    read_user_impl(app_data, uid).await
+    read_user_impl(app_data, request, uid).await
 }
 
 pub fn users_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::ServiceConfig)> {
@@ -318,8 +397,6 @@ pub fn users_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::Servic
             web::scope("users")
                 .app_data(state.clone())
                 .app_data(default_json_config())
-                // .route("/default/permissions", web::get().to(index))
-                // .route("/public/{uid}", web::get().to(index))
                 // .route("/public", web::get().to(index))
                 // .route("/me/password", web::post().to(index))
                 .service(
@@ -330,7 +407,6 @@ pub fn users_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::Servic
                         .route("", web::post().to(upload_avatar_for_me))
                 )
                 // .route("/me/roles", web::get().to(index))
-                // .route("/me/permissions", web::get().to(index))
                 .route("/me", web::get().to(read_user_for_me))
                 // .route("/me", web::patch().to(index))
                 // .route("/me", web::delete().to(index))
@@ -343,7 +419,6 @@ pub fn users_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::Servic
                         .route("", web::post().to(upload_avatar))
                 )
                 // .route("/{uid}/roles", web::get().to(index))
-                // .route("/{uid}/permissions", web::get().to(index))
                 .route("/{uid}", web::get().to(read_user))
                 // .route("/{uid}", web::patch().to(index))
                 // .route("/{uid}", web::delete().to(index))

@@ -1,7 +1,7 @@
 use crate::{
     config::StartConfig,
     queries::Query,
-    webscoket::{
+    websocket::{
         main_subscriber::MainSubscriber,
         push_messages::{InternalMessage, InnerInternalMessage}
     },

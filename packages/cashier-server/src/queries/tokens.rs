@@ -53,7 +53,7 @@ impl Query {
                                     acquire_host, acquire_remote, acquire_user_agent, revoked) \
                 VALUES ($1, NOW(), NOW() + INTERVAL '{}', $2, $3, $4, $5, false) \
                 RETURNING id, issued_at, expires_at", crate::constants::JWT_EXPIRE),
-                &[Type::INT4, Type::VARCHAR, Type::VARCHAR, Type::VARCHAR, Type::TEXT],
+                &[Type::INT4, Type::TEXT, Type::TEXT, Type::TEXT, Type::TEXT],
             ).await.unwrap(),
             get_secret: client.prepare(
                 "SELECT jwt_secret FROM global_settings LIMIT 1",

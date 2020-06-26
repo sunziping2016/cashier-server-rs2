@@ -17,7 +17,7 @@ use crate::{
         errors::Error as QueryError,
         users::EitherUsernameOrEmail,
     },
-    webscoket::push_messages::{TokenAcquired, TokenRevoked},
+    websocket::push_messages::{TokenAcquired, TokenRevoked},
     internal_server_error,
 };
 use actix_web::{

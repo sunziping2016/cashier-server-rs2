@@ -43,9 +43,10 @@ pub const PREDEFINED_PERMISSIONS: &[PredefinedPermission] = &[
     PredefinedPermission("user", "update-self", "Update Self User", "Update user's own information via PATCH /api/users/me"),
     PredefinedPermission("user", "delete", "Delete User", "Delete a user via DELETE /api/users/:id"),
     PredefinedPermission("user", "delete-self", "Delete Self User", "Delete user's own account via DELETE /api/users/me"),
+    PredefinedPermission("user", "register", "Register User", "Register a new user via POST /api/users/register"),
     // CRUD for user's public information
-    PredefinedPermission("user-public", "read", "Read User Public", "Read the public information of a user via GET /api/users/public/:id"),
-    PredefinedPermission("user-public", "list", "List User Public", "List all the users matching criteria with public information via GET /api/users/public"),
+    PredefinedPermission("user-public", "read", "Read User Public", "Read the public information of a user via GET /api/users/:id?populate=public"),
+    PredefinedPermission("user-public", "list", "List User Public", "List all the users matching criteria with public information via GET /api/users?populate=public"),
     // CRUD for user's password
     PredefinedPermission("user-password", "update", "Update Self User Password", "Update user's password via POST /api/users/:id/password"),
     PredefinedPermission("user-password", "update-self", "Update Self User Password", "Update user's password via POST /api/users/me/password"),
@@ -56,10 +57,6 @@ pub const PREDEFINED_PERMISSIONS: &[PredefinedPermission] = &[
     PredefinedPermission("user-role", "update", "Update User's Role", "Update user's roles via POST /api/users/:id/roles"),
     // Subjects for user's roles
     PredefinedPermission("user-role-updated", "subscribe", "Subscribe User-Role-Updated", "Subscribe to user's role updated message"),
-    // CRUD for user's permission
-    PredefinedPermission("user-permission", "read", "Read User's Permission", "Read user's permissions via GET /api/users/:id/permissions"),
-    PredefinedPermission("user-permission", "read-default", "Read Default User's Permission", "Read default user's permissions via GET /api/users/default/permissions"),
-    PredefinedPermission("user-permission", "read-self", "Read Self User's Permission", "Read user's own permissions via GET /api/users/me/permissions"),
     // Subjects for token
     PredefinedPermission("user-created", "subscribe", "Subscribe User-Created", "Subscribe to user created message"),
     PredefinedPermission("user-updated", "subscribe", "Subscribe User-Updated", "Subscribe to user updated message"),
@@ -83,8 +80,6 @@ pub const PREDEFINED_PERMISSIONS: &[PredefinedPermission] = &[
     PredefinedPermission("token-revoked", "subscribe", "Subscribe Token-Revoked", "Subscribe token revoked message"),
     PredefinedPermission("token-acquired-self", "subscribe", "Subscribe Self Token-Acquired", "Subscribe self token acquired message"),
     PredefinedPermission("token-revoked-self", "subscribe", "Subscribe Self Token-Revoked", "Subscribe self token revoked message"),
-    // Websocket connect
-    PredefinedPermission("websocket", "connect", "Connect to Websocket", "Connect to the websocket via /api/ws"),
 ];
 
 pub const PREDEFINED_ROLES: &[PredefinedRole] = &[
@@ -107,10 +102,9 @@ pub const PREDEFINED_ROLES: &[PredefinedRole] = &[
         ("user", "read"),
         ("user", "list"),
         ("user", "update"),
+        ("user", "delete"),
         ("user-password", "update"),
         ("user-avatar", "update"),
-        ("user", "delete"),
-        ("user-permission", "read"),
         ("token-acquired", "subscribe"),
         ("token-revoked", "subscribe"),
         ("user-created", "subscribe"),
@@ -124,18 +118,17 @@ pub const PREDEFINED_ROLES: &[PredefinedRole] = &[
         ("user-public", "list"),
         ("user-password", "update-self"),
         ("user-avatar", "update-self"),
-        ("user-permission", "read-self"),
         ("token", "resume"),
         ("token", "revoke-self"),
         ("token", "list-self"),
         ("token", "read-single-self"),
         ("user-updated-self", "subscribe"),
         ("user-deleted-self", "subscribe"),
-        ("revoke-single-self", "subscribe"),
         ("token-acquired-self", "subscribe"),
         ("token-revoked-self", "subscribe"),
     ], "Normal User", "Manage users's own information", true),
     PredefinedRole("default", &[
+        ("user", "register"),
         ("token", "acquire-by-username"),
         ("token", "acquire-by-email"),
     ], "Default", "Every user including not logged-in ones implicitly has this role", false),

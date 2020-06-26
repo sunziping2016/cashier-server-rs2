@@ -5,7 +5,7 @@ use crate::{
     },
     config::StartConfig,
     queries::Query,
-    webscoket::main_subscriber::MainSubscriber,
+    websocket::main_subscriber::MainSubscriber,
 };
 use actix::Actor;
 use actix_files as fs;

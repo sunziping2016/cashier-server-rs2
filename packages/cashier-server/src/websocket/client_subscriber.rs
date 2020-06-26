@@ -1,16 +1,14 @@
 use crate::{
-    webscoket::{
+    websocket::{
         main_subscriber::UpdateSubscribe,
         push_messages::{
             PermissionIdSubjectAction,
             InternalMessage, PublicMessage,
             InnerInternalMessage, InnerPublicMessage,
+            UserRoleCreated, RolePermissionCreated,
         },
     },
-    api::{
-        app_state::AppState,
-        extractors::auth::Auth,
-    },
+    api::app_state::AppState,
     constants::{
         WEBSOCKET_HEARTBEAT_INTERVAL,
         WEBSOCKET_CLIENT_TIMEOUT,
@@ -38,8 +36,6 @@ use std::{
     convert::{Infallible, identity},
     borrow::Cow,
 };
-use crate::webscoket::push_messages::UserRoleCreated;
-use crate::webscoket::push_messages::RolePermissionCreated;
 
 const MUST_INCLUDE_SUBJECT: &[&str] = &[
     "user-updated", // for block
@@ -207,14 +203,10 @@ impl fmt::Debug for ClientSubscriber {
 }
 
 impl ClientSubscriber {
-    pub fn new(app_data: &web::Data<AppState>, auth: &Auth) -> Self {
+    pub fn new(app_data: &web::Data<AppState>) -> Self {
         Self {
             app_data: app_data.clone(),
-            claims: auth.claims.as_ref().map(|x| Claims {
-                user_id: x.uid,
-                jwt_id: x.jti,
-                expires_at: DateTime::from_utc(NaiveDateTime::from_timestamp(x.exp, 0), Utc),
-            }),
+            claims: None,
             last_heartbeat: Utc::now(),
             expire_timer: None,
             permissions: PermissionTree::default(),
@@ -594,18 +586,20 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for ClientSubscriber 
                 self.last_heartbeat = Utc::now();
             }
             ws::Message::Text(text) => {
-                if let Ok(msg) = serde_json::from_str::<ClientRequestMessage>(&text) {
-                    ctx.spawn(ctx.address().send(msg)
-                        .into_actor(self)
-                        .then(|result, _, _| {
-                            if let Err(e) = result {
-                                error!("send ClientRequestMessage error: {}", e);
-                            }
-                            fut::ready(())
-                        })
-                    );
-                } else {
-                    warn!("deserialize ClientRequestMessage failed");
+                match serde_json::from_str::<ClientRequestMessage>(&text) {
+                    Ok(msg) => {
+                        ctx.spawn(ctx.address().send(msg)
+                            .into_actor(self)
+                            .then(|result, _, _| {
+                                if let Err(e) = result {
+                                    error!("send ClientRequestMessage error: {}", e);
+                                }
+                                fut::ready(())
+                            })
+                        );
+                    }
+                    Err(e) =>
+                        warn!("deserialize ClientRequestMessage error: {}", e),
                 }
             }
             ws::Message::Close(_)

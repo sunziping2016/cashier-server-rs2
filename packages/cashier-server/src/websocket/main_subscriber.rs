@@ -1,5 +1,5 @@
 use crate::{
-    webscoket::push_messages::InternalMessage,
+    websocket::push_messages::InternalMessage,
 };
 use actix::{
     Actor, Message, Handler, Context, AsyncContext,

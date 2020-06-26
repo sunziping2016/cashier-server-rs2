@@ -1,7 +1,6 @@
 use crate::{
     config::InitConfig,
     constants::{BCRYPT_COST, JWT_SECRET_LENGTH},
-    batch::{batch_values, batch_slots, ToSql}
 };
 use super::predefined;
 use err_derive::Error;
@@ -11,6 +10,7 @@ use tokio_postgres::{
     Error as PostgresError,
     NoTls,
 };
+use unzip_n::unzip_n;
 
 #[derive(Debug, Error)]
 pub enum InitError {
@@ -38,9 +38,9 @@ pub async fn init_permission(client: &Client) -> Result<()> {
         .query("\
             CREATE TABLE IF NOT EXISTS permission (\
                 id serial PRIMARY KEY,\
-                subject VARCHAR (24) NOT NULL,\
-                action VARCHAR (24) NOT NULL,\
-                display_name VARCHAR (40) NOT NULL,\
+                subject TEXT NOT NULL,\
+                action TEXT NOT NULL,\
+                display_name TEXT NOT NULL,\
                 description TEXT NOT NULL,\
                 created_at TIMESTAMP WITH TIME ZONE NOT NULL,\
                 updated_at TIMESTAMP WITH TIME ZONE NOT NULL,\
@@ -56,27 +56,26 @@ pub async fn init_permission(client: &Client) -> Result<()> {
         .await?;
     // Insert items
     const ITEMS: &[predefined::PredefinedPermission] = predefined::PREDEFINED_PERMISSIONS;
+    unzip_n!(4);
+    let (subjects, actions, display_names, descriptions):
+        (Vec<_>, Vec<_>, Vec<_>, Vec<_>) = ITEMS.iter()
+        .map(|x| (x.0, x.1, x.2, x.3))
+        .unzip_n();
     let result = client
-        .execute(&format!("\
+        .execute("\
         INSERT INTO permission (subject, action, display_name, description, \
                                 created_at, updated_at, deleted) \
-        VALUES {} \
+        SELECT UNNEST($1::TEXT[]), UNNEST($2::TEXT[]), UNNEST($3::TEXT[]), UNNEST($4::TEXT[]), \
+               NOW(), NOW(), FALSE \
         ON CONFLICT (subject, action) WHERE NOT deleted \
         DO UPDATE SET \
             display_name = EXCLUDED.display_name, \
             description = EXCLUDED.description, \
             updated_at = EXCLUDED.updated_at\
-        ", batch_values(ITEMS.len(), |i|
-            format!("{},NOW(),NOW(),FALSE",
-                    batch_slots(i * 4 + 1, (i + 1) * 4 + 1)))
-        )[..], &ITEMS.iter()
-            .flat_map(|item| vec![
-                &item.0 as &ToSql, &item.1, &item.2, &item.3,
-            ])
-            .collect::<Vec<_>>()[..],
+        ", &[&subjects, &actions, &display_names, &descriptions],
         )
         .await?;
-    info!("modify {} rows in permission table", result);
+    info!("modify {}/{} rows in permission table", result, ITEMS.len());
     Ok(())
 }
 
@@ -98,8 +97,8 @@ pub async fn init_role(client: &Client) -> Result<()> {
         .query("\
             CREATE TABLE IF NOT EXISTS role (\
                 id serial PRIMARY KEY,\
-                name VARCHAR(24) NOT NULL,\
-                display_name VARCHAR (40) NOT NULL,\
+                name TEXT NOT NULL,\
+                display_name TEXT NOT NULL,\
                 description TEXT NOT NULL,\
                 \"default\" BOOL NOT NULL,\
                 created_at TIMESTAMP WITH TIME ZONE NOT NULL,\
@@ -124,47 +123,43 @@ pub async fn init_role(client: &Client) -> Result<()> {
         .await?;
     // Insert Items
     const ITEMS: &[predefined::PredefinedRole] = predefined::PREDEFINED_ROLES;
+    unzip_n!(4);
+    let (names, display_names, descriptions, defaults):
+        (Vec<_>, Vec<_>, Vec<_>, Vec<_>) = ITEMS.iter()
+        .map(|x| (x.0, x.2, x.3, x.4))
+        .unzip_n();
     let result = client
-        .execute(&format!("\
+        .execute("\
         INSERT INTO role (name, display_name, description, \"default\", \
                           created_at, updated_at, deleted) \
-        VALUES {} \
+        SELECT UNNEST($1::TEXT[]), UNNEST($2::TEXT[]), UNNEST($3::TEXT[]), UNNEST($4::BOOLEAN[]), \
+               NOW(), NOW(), FALSE \
         ON CONFLICT (name) WHERE NOT deleted \
         DO UPDATE SET \
             display_name = EXCLUDED.display_name, \
             description = EXCLUDED.description, \
             \"default\" = EXCLUDED.\"default\", \
             updated_at = EXCLUDED.updated_at\
-        ", batch_values(ITEMS.len(), |i| {
-            format!("{},NOW(),NOW(),FALSE",
-                    batch_slots(i * 4 + 1, (i + 1) * 4 + 1))
-        }))[..], &ITEMS.iter()
-            .flat_map(|item| vec![
-                &item.0 as &ToSql, &item.2, &item.3, &item.4,
-            ])
-            .collect::<Vec<_>>()[..]
-        )
+        ", &[&names, &display_names, &descriptions, &defaults])
         .await?;
-    info!("modify {} rows in role table", result);
-    let items = ITEMS.iter()
+    info!("modify {}/{} rows in role table", result, ITEMS.len());
+    unzip_n!(3);
+    let (roles, subjects, actions): (Vec<_>, Vec<_>, Vec<_>) = ITEMS.iter()
         .flat_map(|role| role.1.iter()
             .map(move |permission| (role.0, permission.0, permission.1)))
-        .collect::<Vec<_>>();
+        .unzip_n();
     let result = client
-        .execute(&format!("\
+        .execute("\
         INSERT INTO role_permission (role, permission) \
-        SELECT role.id, permission.id FROM (VALUES {}) AS temp(role, subject, action) \
-              JOIN permission ON permission.subject = temp.subject and permission.action = temp.action \
-              JOIN role ON role.name = temp.role \
+        SELECT role.id, permission.id FROM \
+            (SELECT UNNEST($1::TEXT[]) AS role, UNNEST($2::TEXT[]) AS subject,\
+                    UNNEST($3::TEXT[]) AS action) AS temp \
+                JOIN permission ON permission.subject = temp.subject and permission.action = temp.action \
+                JOIN role ON role.name = temp.role \
         ON CONFLICT (role, permission) DO NOTHING\
-        ", batch_values(items.len(), |i|
-            batch_slots(i * 3 + 1, (i + 1) * 3 + 1))
-        )[..], &items.iter()
-            .flat_map(|item| vec![&item.0 as &ToSql, &item.1, &item.2])
-            .collect::<Vec<_>>()[..]
-        )
+        ", &[&roles, &subjects, &actions])
         .await?;
-    info!("modify {} rows in role_permission table", result);
+    info!("modify {}/{} rows in role_permission table", result, roles.len());
     Ok(())
 }
 
@@ -186,12 +181,12 @@ pub async fn init_user(client: &Client, config: &InitConfig) -> Result<()> {
         .query("\
             CREATE TABLE IF NOT EXISTS \"user\" (\
                 id serial PRIMARY KEY,\
-                username VARCHAR(24) NOT NULL,\
-                password VARCHAR(72) NOT NULL,\
-                email VARCHAR (254),\
-                nickname VARCHAR(24),\
-                avatar VARCHAR(128),\
-                avatar128 VARCHAR(128),\
+                username TEXT NOT NULL,\
+                password TEXT NOT NULL,\
+                email TEXT,\
+                nickname TEXT,\
+                avatar TEXT,\
+                avatar128 TEXT,\
                 blocked BOOL,\
                 created_at TIMESTAMP WITH TIME ZONE NOT NULL,\
                 updated_at TIMESTAMP WITH TIME ZONE NOT NULL,\
@@ -237,24 +232,17 @@ pub async fn init_user(client: &Client, config: &InitConfig) -> Result<()> {
                 updated_at = EXCLUDED.updated_at\
             ", &[&superuser_username, &superuser_password])
             .await?;
-        info!("modify {} rows in user table", result);
-        let items = predefined::SUPERUSER_ROLES.iter()
-            .map(|role| (superuser_username.clone(), *role))
-            .collect::<Vec<_>>();
+        info!("modify {}/{} rows in user table", result, 1);
         let result = client
-            .execute(&format!("\
+            .execute("\
             INSERT INTO user_role (\"user\", role) \
-            SELECT \"user\".id, role.id FROM (VALUES {}) AS temp(username, role) \
+            SELECT \"user\".id, role.id FROM (SELECT UNNEST($1::TEXT[]) AS role) AS temp \
                   JOIN role ON role.name = temp.role AND NOT role.deleted \
-                  JOIN \"user\" ON \"user\".username = temp.username \
-            ON CONFLICT (\"user\", role) DO NOTHING", batch_values(items.len(), |i|
-                batch_slots(i * 2 + 1, (i + 1) * 2 + 1))
-            )[..], &items.iter()
-                .flat_map(|item| vec![&item.0 as &ToSql, &item.1])
-                .collect::<Vec<_>>()[..]
-            )
+                  JOIN \"user\" ON \"user\".username = $2 \
+            ON CONFLICT (\"user\", role) DO NOTHING\
+            ", &[&predefined::SUPERUSER_ROLES, &superuser_username])
             .await?;
-        info!("modify {} rows in user_role table", result);
+        info!("modify {}/{} rows in user_role table", result, predefined::SUPERUSER_ROLES.len());
     }
     Ok(())
 }
@@ -276,9 +264,9 @@ pub async fn init_token(client: &Client) -> Result<()> {
                 \"user\" INTEGER REFERENCES \"user\"(id) ON DELETE CASCADE NOT NULL,\
                 issued_at TIMESTAMP(0) WITH TIME ZONE NOT NULL,\
                 expires_at TIMESTAMP(0) WITH TIME ZONE NOT NULL,\
-                acquire_method VARCHAR(24) NOT NULL,\
-                acquire_host VARCHAR(60) NOT NULL,\
-                acquire_remote VARCHAR(60),\
+                acquire_method TEXT NOT NULL,\
+                acquire_host TEXT NOT NULL,\
+                acquire_remote TEXT,\
                 acquire_user_agent TEXT,\
                 revoked BOOL NOT NULL\
             )", &[])
@@ -320,7 +308,7 @@ pub async fn init_global_settings(client: &Client) -> Result<()> {
             updated_at = EXCLUDED.updated_at\
          ", &[&jwt_secret])
         .await?;
-    info!("modify {} rows in global_settings table", result);
+    info!("modify {}/{} rows in global_settings table", result, 1);
     Ok(())
 }
 
