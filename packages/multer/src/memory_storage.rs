@@ -32,11 +32,17 @@ pub struct MemoryStorageBuilder {
     max_size: Option<usize>,
 }
 
-impl MemoryStorageBuilder {
-    pub fn new() -> Self {
+impl Default for MemoryStorageBuilder {
+    fn default() -> Self {
         Self {
             max_size: None
         }
+    }
+}
+
+impl MemoryStorageBuilder {
+    pub fn new() -> Self {
+        Self::default()
     }
     pub fn max_size(mut self, size: usize) -> Self {
         self.max_size = Some(size);
@@ -48,7 +54,7 @@ impl MemoryStorageBuilder {
             let mut result = BytesMut::new();
             while let Some(chunk) = field.next().await {
                 let data = chunk
-                    .map_err(|e| MulterError::from(e))?;
+                    .map_err(MulterError::from)?;
                 if let Some(max_size) = max_size {
                     if result.len() + data.len() > max_size {
                         return Err(MulterError::MaxFieldContentLengthReached {

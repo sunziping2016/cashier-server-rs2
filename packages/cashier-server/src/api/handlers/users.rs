@@ -50,6 +50,7 @@ use std::{
     convert::Infallible,
     iter,
     path::{Path, PathBuf},
+    cmp::Ordering,
 };
 use validator::Validate;
 use validator_derive::Validate;
@@ -168,12 +169,10 @@ async fn upload_avatar_impl(
         let avatar = image::load_from_memory(content)?;
         let (width, height) = avatar.dimensions();
         let size = std::cmp::min(width, height);
-        let cropped_avatar = if width < height {
-            avatar.crop_imm(0, (height - size) / 2, size, size)
-        } else if height < width {
-            avatar.crop_imm((width - size) / 2, 0, size, size)
-        } else {
-            avatar
+        let cropped_avatar = match width.cmp(&height) {
+            Ordering::Less => avatar.crop_imm(0, (height - size) / 2, size, size),
+            Ordering::Greater => avatar.crop_imm((width - size) / 2, 0, size, size),
+            Ordering::Equal => avatar,
         };
         let mut rng = thread_rng();
         let filename = iter::repeat(())
@@ -185,7 +184,7 @@ async fn upload_avatar_impl(
                                         image::ImageFormat::Png)?;
         let thumbnail_filename = if size <= 128 { None } else {
             let thumbnail = cropped_avatar.resize(128, 128,image::imageops::FilterType::Triangle);
-            let thumbnail_filename = filename.clone() + ".thumb.png";
+            let thumbnail_filename = filename + ".thumb.png";
             thumbnail.save_with_format(join_avatar_file(&root, &thumbnail_filename),
                                        image::ImageFormat::Png)
                 .map_err(|e| {
@@ -297,12 +296,12 @@ impl From<ReadUserQuery> for ReadUserQueryDecoded {
     fn from(request: ReadUserQuery) -> Self {
         Self {
             populate_user: request.populate_user.clone()
-                .map(|x| UserAccessLevel::from(x))
+                .map(UserAccessLevel::from)
                 .unwrap_or(UserAccessLevel::WithoutRoles),
             populate_role: request.populate_role.clone()
-                .map(|x| RoleAccessLevel::from(x)),
-            populate_permission: request.populate_permission.clone()
-                .map(|x| PermissionAccessLevel::from(x)),
+                .map(RoleAccessLevel::from),
+            populate_permission: request.populate_permission
+                .map(PermissionAccessLevel::from),
         }
     }
 }
@@ -413,7 +412,7 @@ pub fn users_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::Servic
                 // .route("/{uid}/password", web::post().to(index))
                 .service(
                     web::scope("/{uid}/avatar")
-                        .app_data(state.clone())
+                        .app_data(state)
                         .app_data(default_path_config())
                         .app_data(avatar_multer_config())
                         .route("", web::post().to(upload_avatar))

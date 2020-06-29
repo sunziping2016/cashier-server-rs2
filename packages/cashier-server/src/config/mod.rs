@@ -116,7 +116,7 @@ impl Config {
         let matches = App::new("cashier-server")
             .version(&format!("{} ({} {})", BUILD_VERSION.trim(),
                               BUILD_COMMIT_ID.trim(), BUILD_TIME.trim())[..])
-            .author(&AUTHORS.trim().split("\n").collect::<Vec<&str>>().join(", ")[..])
+            .author(&AUTHORS.trim().split('\n').collect::<Vec<&str>>().join(", ")[..])
             .about("Rust implementation for cashier server")
             .arg(Arg::with_name("config")
                 .short('c')

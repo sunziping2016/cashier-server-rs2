@@ -96,10 +96,10 @@ impl Handler<RedisMessage> for MainSubscriber {
                 for client in clients {
                     let mailbox = &mut deliver_msgs.entry((*client).clone())
                         .or_insert_with(|| InternalMessage {
-                            sender_uid: origin_msg.sender_uid.clone(),
-                            sender_jti: origin_msg.sender_jti.clone(),
+                            sender_uid: origin_msg.sender_uid,
+                            sender_jti: origin_msg.sender_jti,
                             messages: Vec::new(),
-                            created_at: origin_msg.created_at.clone(),
+                            created_at: origin_msg.created_at,
                         }).messages;
                     mailbox.push(msg.clone())
                 }
@@ -142,7 +142,7 @@ impl Handler<UpdateSubscribe> for MainSubscriber {
         let to_add = &msg.subjects - old_subjects;
         for subject in to_add.iter() {
             let clients = self.subject2client.entry(subject.clone())
-                .or_insert_with(|| HashSet::new());
+                .or_insert_with(HashSet::new);
             clients.insert(msg.client.clone());
         }
         if msg.subjects.is_empty() {

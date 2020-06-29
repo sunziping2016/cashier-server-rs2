@@ -134,7 +134,7 @@ pub const PREDEFINED_ROLES: &[PredefinedRole] = &[
     ], "Default", "Every user including not logged-in ones implicitly has this role", false),
 ];
 
-pub const SUPERUSER_ROLES: &[&'static str] = &[
+pub const SUPERUSER_ROLES: &[&str] = &[
     "permission-admin",
     "user-admin",
     "normal-user",

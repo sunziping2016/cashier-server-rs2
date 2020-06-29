@@ -423,24 +423,23 @@ pub struct Query {
 
 impl Query {
     pub async fn new(client: &Client) -> Self {
-        Self {
-            find_one_from_username_to_id_password_blocked: client.prepare_typed(
-                "SELECT id, password, blocked FROM \"user\" \
+        let find_one_from_username_to_id_password_blocked = client.prepare_typed(
+            "SELECT id, password, blocked FROM \"user\" \
                 WHERE username = $1 AND NOT deleted LIMIT 1",
-                &[Type::TEXT],
-            ).await.unwrap(),
-            find_one_from_email_to_id_password_blocked: client.prepare_typed(
-                "SELECT id, password, blocked FROM \"user\" \
+            &[Type::TEXT],
+        ).await.unwrap();
+        let find_one_from_email_to_id_password_blocked = client.prepare_typed(
+            "SELECT id, password, blocked FROM \"user\" \
                 WHERE email = $1 AND NOT deleted LIMIT 1",
-                &[Type::TEXT],
-            ).await.unwrap(),
-            check_user_blocked: client.prepare_typed(
-                "SELECT blocked FROM \"user\" \
+            &[Type::TEXT],
+        ).await.unwrap();
+        let check_user_blocked = client.prepare_typed(
+            "SELECT blocked FROM \"user\" \
                 WHERE id = $1 AND NOT deleted LIMIT 1",
-                &[Type::INT4],
-            ).await.unwrap(),
-            fetch_permission: client.prepare_typed(
-                "SELECT DISTINCT subject, action from ( \
+            &[Type::INT4],
+        ).await.unwrap();
+        let fetch_permission = client.prepare_typed(
+            "SELECT DISTINCT subject, action from ( \
                     SELECT role.id from user_role, role \
                         WHERE user_role.user = $1 AND user_role.role = role.id AND NOT role.deleted \
                     UNION \
@@ -449,106 +448,106 @@ impl Query {
                 ) as role, role_permission, permission \
                     WHERE role.id = role_permission.role \
                     AND role_permission.permission = permission.id AND NOT permission.deleted",
-                &[Type::INT4],
-            ).await.unwrap(),
-            fetch_default_permission: client.prepare(
-                "SELECT DISTINCT subject, action from role, role_permission, permission \
+            &[Type::INT4],
+        ).await.unwrap();
+        let fetch_default_permission = client.prepare(
+            "SELECT DISTINCT subject, action from role, role_permission, permission \
                 WHERE role.name = 'default' AND NOT role.deleted AND role.id = role_permission.role \
                 AND role_permission.permission = permission.id AND NOT permission.deleted"
-            ).await.unwrap(),
-            check_extra_roles: client.prepare_typed(
-                "SELECT UNNEST($1) EXCEPT \
+        ).await.unwrap();
+        let check_extra_roles = client.prepare_typed(
+            "SELECT UNNEST($1) EXCEPT \
                 SELECT role.name from user_role, role WHERE user_role.user = $2 \
                 AND user_role.role = role.id AND NOT role.deleted",
-                &[Type::TEXT_ARRAY, Type::INT4]
-            ).await.unwrap(),
-            find_one_from_username_to_username_email: client.prepare_typed(
-                "SELECT username, email FROM \"user\" \
+            &[Type::TEXT_ARRAY, Type::INT4]
+        ).await.unwrap();
+        let find_one_from_username_to_username_email = client.prepare_typed(
+            "SELECT username, email FROM \"user\" \
                 WHERE username = $1 AND NOT deleted LIMIT 1",
-                &[Type::TEXT],
-            ).await.unwrap(),
-            find_one_from_username_email_to_username_email: client.prepare_typed(
-                "SELECT username, email FROM \"user\" \
+            &[Type::TEXT],
+        ).await.unwrap();
+        let find_one_from_username_email_to_username_email = client.prepare_typed(
+            "SELECT username, email FROM \"user\" \
                 WHERE (username = $1 OR email = $2) AND NOT deleted LIMIT 1",
-                &[Type::TEXT, Type::TEXT],
-            ).await.unwrap(),
-            insert_one: client.prepare_typed(
-                "INSERT INTO \"user\" (username, password, email, nickname, \
+            &[Type::TEXT, Type::TEXT],
+        ).await.unwrap();
+        let insert_one = client.prepare_typed(
+            "INSERT INTO \"user\" (username, password, email, nickname, \
                                        created_at, updated_at, deleted) \
                 VALUES ($1, $2, $3, $4, NOW(), NOW(), false) \
                 RETURNING id, created_at",
-                &[Type::TEXT, Type::TEXT, Type::TEXT, Type::TEXT],
-            ).await.unwrap(),
-            insert_one_roles: client.prepare_typed(
-                "INSERT INTO user_role (\"user\", role) \
+            &[Type::TEXT, Type::TEXT, Type::TEXT, Type::TEXT],
+        ).await.unwrap();
+        let insert_one_roles = client.prepare_typed(
+            "INSERT INTO user_role (\"user\", role) \
                 SELECT $1, role.id FROM (SELECT UNNEST($2) AS role) AS temp, role \
                 WHERE role.name = temp.role AND NOT role.deleted",
-                &[Type::INT4, Type::TEXT_ARRAY],
-            ).await.unwrap(),
-            fetch_avatars: client.prepare_typed(
-                "SELECT avatar, avatar128 FROM \"user\" \
+            &[Type::INT4, Type::TEXT_ARRAY],
+        ).await.unwrap();
+        let fetch_avatars = client.prepare_typed(
+            "SELECT avatar, avatar128 FROM \"user\" \
                 WHERE id = $1 AND NOT deleted LIMIT 1",
-                &[Type::INT4],
-            ).await.unwrap(),
-            update_avatars: client.prepare_typed(
-                "UPDATE \"user\" SET avatar = $1, avatar128 = $2 \
+            &[Type::INT4],
+        ).await.unwrap();
+        let update_avatars = client.prepare_typed(
+            "UPDATE \"user\" SET avatar = $1, avatar128 = $2 \
                 WHERE id = $3 AND NOT deleted \
                 RETURNING updated_at",
-                &[Type::TEXT, Type::TEXT, Type::INT4]
-            ).await.unwrap(),
-            find_one: client.prepare_typed(
-                "SELECT id, username, email, nickname, avatar, avatar128, \
+            &[Type::TEXT, Type::TEXT, Type::INT4]
+        ).await.unwrap();
+        let find_one = client.prepare_typed(
+            "SELECT id, username, email, nickname, avatar, avatar128, \
                         blocked, created_at, updated_at FROM \"user\" \
                 WHERE id = $1 AND NOT deleted LIMIT 1",
-                &[Type::INT4],
-            ).await.unwrap(),
-            find_one_public: client.prepare_typed(
-                "SELECT id, username, nickname, avatar, avatar128, created_at FROM \"user\" \
+            &[Type::INT4],
+        ).await.unwrap();
+        let find_one_public = client.prepare_typed(
+            "SELECT id, username, nickname, avatar, avatar128, created_at FROM \"user\" \
                 WHERE id = $1 AND NOT deleted LIMIT 1",
-                &[Type::INT4],
-            ).await.unwrap(),
-            find_roles_only_id: client.prepare_typed(
-                "SELECT DISTINCT \"user_id\", id \
+            &[Type::INT4],
+        ).await.unwrap();
+        let find_roles_only_id = client.prepare_typed(
+            "SELECT DISTINCT \"user_id\", id \
                     FROM (SELECT UNNEST($1) AS user_id) AS temp, user_role, role \
                 WHERE user_id = user_role.user AND role.id = user_role.role AND NOT role.deleted",
-                &[Type::INT4_ARRAY],
-            ).await.unwrap(),
-            find_roles_short: client.prepare_typed(
-                "SELECT DISTINCT \"user_id\", id, name \
+            &[Type::INT4_ARRAY],
+        ).await.unwrap();
+        let find_roles_short = client.prepare_typed(
+            "SELECT DISTINCT \"user_id\", id, name \
                     FROM (SELECT UNNEST($1) AS user_id) AS temp, user_role, role \
                 WHERE user_id = user_role.user AND role.id = user_role.role AND NOT role.deleted",
-                &[Type::INT4_ARRAY],
-            ).await.unwrap(),
-            find_roles_without_permissions: client.prepare_typed(
-                "SELECT DISTINCT \"user_id\", id, name, display_name, description, created_at, updated_at \
+            &[Type::INT4_ARRAY],
+        ).await.unwrap();
+        let find_roles_without_permissions = client.prepare_typed(
+            "SELECT DISTINCT \"user_id\", id, name, display_name, description, created_at, updated_at \
                     FROM (SELECT UNNEST($1) AS user_id) AS temp, user_role, role \
                 WHERE user_id = user_role.user AND role.id = user_role.role AND NOT role.deleted",
-                &[Type::INT4_ARRAY],
-            ).await.unwrap(),
-            find_permissions_only_id: client.prepare_typed(
-                "SELECT DISTINCT role_id, id \
+            &[Type::INT4_ARRAY],
+        ).await.unwrap();
+        let find_permissions_only_id = client.prepare_typed(
+            "SELECT DISTINCT role_id, id \
                     FROM (SELECT UNNEST($1) as role_id) as temp, role_permission, permission \
                 WHERE role_id = role_permission.role AND permission.id = role_permission.permission \
                     AND NOT permission.deleted",
-                &[Type::INT4_ARRAY],
-            ).await.unwrap(),
-            find_permissions_short: client.prepare_typed(
-                "SELECT DISTINCT role_id, id, subject, action \
+            &[Type::INT4_ARRAY],
+        ).await.unwrap();
+        let find_permissions_short = client.prepare_typed(
+            "SELECT DISTINCT role_id, id, subject, action \
                     FROM (SELECT UNNEST($1) as role_id) as temp, role_permission, permission \
                 WHERE role_id = role_permission.role AND permission.id = role_permission.permission \
                     AND NOT permission.deleted",
-                &[Type::INT4_ARRAY],
-            ).await.unwrap(),
-            find_permissions_all: client.prepare_typed(
-                "SELECT DISTINCT role_id, id, subject, action, display_name, description, \
+            &[Type::INT4_ARRAY],
+        ).await.unwrap();
+        let find_permissions_all = client.prepare_typed(
+            "SELECT DISTINCT role_id, id, subject, action, display_name, description, \
                         created_at, updated_at \
                     FROM (SELECT UNNEST($1) as role_id) as temp, role_permission, permission \
                 WHERE role_id = role_permission.role AND permission.id = role_permission.permission \
                     AND NOT permission.deleted",
-                &[Type::INT4_ARRAY],
-            ).await.unwrap(),
-            fetch_permission_tree: client.prepare_typed(
-                "SELECT DISTINCT role.id as role_id, permission.id as permission_id, subject, action from ( \
+            &[Type::INT4_ARRAY],
+        ).await.unwrap();
+        let fetch_permission_tree = client.prepare_typed(
+            "SELECT DISTINCT role.id as role_id, permission.id as permission_id, subject, action from ( \
                     SELECT role.id from user_role, role \
                         WHERE user_role.user = $1 AND user_role.role = role.id AND NOT role.deleted \
                     UNION \
@@ -557,14 +556,37 @@ impl Query {
                 ) as role, role_permission, permission \
                     WHERE role.id = role_permission.role \
                     AND role_permission.permission = permission.id AND NOT permission.deleted",
-                &[Type::INT4],
-            ).await.unwrap(),
-            fetch_default_permission_tree: client.prepare(
-                "SELECT DISTINCT role.id as role_id, permission.id as permission_id, subject, action \
+            &[Type::INT4],
+        ).await.unwrap();
+        let fetch_default_permission_tree = client.prepare(
+            "SELECT DISTINCT role.id as role_id, permission.id as permission_id, subject, action \
                     from role, role_permission, permission \
                 WHERE role.name = 'default' AND NOT role.deleted AND role.id = role_permission.role \
                 AND role_permission.permission = permission.id AND NOT permission.deleted"
-            ).await.unwrap(),
+        ).await.unwrap();
+        Self {
+            find_one_from_username_to_id_password_blocked,
+            find_one_from_email_to_id_password_blocked,
+            check_user_blocked,
+            fetch_permission,
+            fetch_default_permission,
+            check_extra_roles,
+            find_one_from_username_to_username_email,
+            find_one_from_username_email_to_username_email,
+            insert_one,
+            insert_one_roles,
+            fetch_avatars,
+            update_avatars,
+            find_one,
+            find_one_public,
+            find_roles_only_id,
+            find_roles_short,
+            find_roles_without_permissions,
+            find_permissions_only_id,
+            find_permissions_short,
+            find_permissions_all,
+            fetch_permission_tree,
+            fetch_default_permission_tree,
         }
     }
     pub async fn find_one_from_username_to_id_password_blocked(
@@ -809,7 +831,7 @@ impl Query {
         let mut role2permission: HashMap<i32, Vec<i32>> = HashMap::new();
         if add_role_permissions || permission_access_level.is_some() {
             let mut roles_id: Vec<_> =  user2role.values()
-                .flat_map(|x| x.iter().map(|x| *x))
+                .flat_map(|x| x.iter().copied())
                 .collect();
             roles_id.sort();
             roles_id.dedup();

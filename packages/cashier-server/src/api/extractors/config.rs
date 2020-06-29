@@ -33,7 +33,7 @@ pub fn avatar_multer_config() -> Arc<MulterConfig> {
             .accept_file(true)
             .accept_content_type(vec![mime::IMAGE_PNG, mime::IMAGE_JPEG])
             .handler(MemoryStorageBuilder::new()
-                .max_size(1 * 1024 * 1024)
+                .max_size(1024 * 1024)
                 .build()
             )
         )

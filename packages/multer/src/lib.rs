@@ -250,7 +250,7 @@ pub async fn multer(mut payload: Multipart, config: &MulterConfig) -> Result<Mul
         fields: HashMap::new(),
     };
     while let Some(mut field) = payload.try_next().await
-        .map_err(|e| MulterError::from(e))? {
+        .map_err(MulterError::from)? {
         field_count += 1;
         // Check max_field_count
         if let Some(max_field_count) = config.max_field_count {

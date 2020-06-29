@@ -13,9 +13,11 @@ pub struct Query {
 
 impl Query {
     pub async fn new(client: &Client) -> Self {
+        let user = users::Query::new(client).await;
+        let token = tokens::Query::new(client).await;
         Self {
-            user: users::Query::new(client).await,
-            token: tokens::Query::new(client).await,
+            user,
+            token,
         }
     }
 }

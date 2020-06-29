@@ -156,17 +156,17 @@ impl FileStorageBuilder {
                     if make_dirs {
                         block(move || std::fs::create_dir_all(destination_copy))
                             .await
-                            .map_err(|e| MulterError::from(e))?;
+                            .map_err(MulterError::from)?;
                     }
                     let filepath = Path::new(&destination).join(&filename);
                     let path = OsString::from(filepath.clone());
                     let mut file = block(move || std::fs::File::create(filepath))
                         .await
-                        .map_err(|e| MulterError::from(e))?;
+                        .map_err(MulterError::from)?;
                     let mut size: usize = 0;
                     while let Some(chunk) = field.next().await {
                         let data = chunk
-                            .map_err(|e| MulterError::from(e))?;
+                            .map_err(MulterError::from)?;
                         size += data.len();
                         if let Some(max_size) = max_size {
                             if size > max_size {

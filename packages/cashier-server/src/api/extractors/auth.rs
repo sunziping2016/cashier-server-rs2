@@ -24,8 +24,7 @@ pub struct Auth {
 impl Auth {
     pub fn has_permission(&self, subject: &str, action: &str) -> bool {
         self.permissions.iter()
-            .find(|permission| permission.subject == subject && permission.action == action)
-            .is_some()
+            .any(|permission| permission.subject == subject && permission.action == action)
     }
 
     pub fn try_permission(&self, subject: &str, action: &str) -> std::result::Result<(), ApiError> {

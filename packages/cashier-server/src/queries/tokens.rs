@@ -47,37 +47,43 @@ pub struct TokenIdUser {
 
 impl Query {
     pub async fn new(client: &Client) -> Self {
-        Self {
-            create_token: client.prepare_typed(&format!(
-                "INSERT INTO token (\"user\", issued_at, expires_at, acquire_method, \
+        let create_token = client.prepare_typed(&format!(
+            "INSERT INTO token (\"user\", issued_at, expires_at, acquire_method, \
                                     acquire_host, acquire_remote, acquire_user_agent, revoked) \
                 VALUES ($1, NOW(), NOW() + INTERVAL '{}', $2, $3, $4, $5, false) \
                 RETURNING id, issued_at, expires_at", crate::constants::JWT_EXPIRE),
-                &[Type::INT4, Type::TEXT, Type::TEXT, Type::TEXT, Type::TEXT],
-            ).await.unwrap(),
-            get_secret: client.prepare(
-                "SELECT jwt_secret FROM global_settings LIMIT 1",
-            ).await.unwrap(),
-            check_token_revoked: client.prepare_typed(
-                "SELECT 0 FROM token WHERE id = $1 AND NOT revoked LIMIT 1",
-                &[Type::INT4],
-            ).await.unwrap(),
-            revoke_token: client.prepare_typed(
-                "UPDATE token SET revoked = true WHERE id = $1 AND NOT revoked",
-                &[Type::INT4]
-            ).await.unwrap(),
-            find_tokens_from_user: client.prepare_typed(
-                "SELECT id, \"user\", issued_at, expires_at, acquire_method, \
+                                           &[Type::INT4, Type::TEXT, Type::TEXT, Type::TEXT, Type::TEXT],
+        ).await.unwrap();
+        let get_secret = client.prepare(
+            "SELECT jwt_secret FROM global_settings LIMIT 1",
+        ).await.unwrap();
+        let check_token_revoked = client.prepare_typed(
+            "SELECT 0 FROM token WHERE id = $1 AND NOT revoked LIMIT 1",
+            &[Type::INT4],
+        ).await.unwrap();
+        let revoke_token = client.prepare_typed(
+            "UPDATE token SET revoked = true WHERE id = $1 AND NOT revoked",
+            &[Type::INT4]
+        ).await.unwrap();
+        let find_tokens_from_user = client.prepare_typed(
+            "SELECT id, \"user\", issued_at, expires_at, acquire_method, \
                     acquire_host, acquire_remote, acquire_user_agent FROM token \
                  WHERE \"user\" = $1 AND expires_at > NOW() AND NOT revoked",
-                &[Type::INT4]
-            ).await.unwrap(),
-            revoke_tokens_from_user: client.prepare_typed(
-                "UPDATE token SET revoked = true \
+            &[Type::INT4]
+        ).await.unwrap();
+        let revoke_tokens_from_user = client.prepare_typed(
+            "UPDATE token SET revoked = true \
                 WHERE \"user\" = $1 AND NOT revoked \
                 RETURNING id, \"user\"",
-                &[Type::INT4]
-            ).await.unwrap(),
+            &[Type::INT4]
+        ).await.unwrap();
+        Self {
+            create_token,
+            get_secret,
+            check_token_revoked,
+            revoke_token,
+            find_tokens_from_user,
+            revoke_tokens_from_user,
         }
     }
     pub async fn create_token(

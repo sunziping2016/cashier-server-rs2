@@ -380,7 +380,7 @@ impl Handler<InternalMessage> for ClientSubscriber {
             Cow::Owned(new_permissions) => Some(new_permissions),
             Cow::Borrowed(_) => None
         };
-        Box::new(if push_message.len() != 0 {
+        Box::new(if !push_message.is_empty() {
             fut::Either::Left(ctx.address().send::<ClientPushMessage>(PublicMessage {
                 sender_uid: msg.sender_uid,
                 sender_jti: msg.sender_jti,
@@ -686,12 +686,12 @@ impl Handler<UpdateTokenRequest> for ClientSubscriber {
                     Ok(claims) => {
                         act.claims = claims;
                         if let Some(ref handle) = act.expire_timer {
-                            ctx.cancel_future(handle.clone());
+                            ctx.cancel_future(*handle);
                             act.expire_timer = None;
                         }
                         if let Some(Claims { ref expires_at, .. }) = act.claims {
                             act.expire_timer = Some(ctx.run_later(
-                                (expires_at.clone() - Utc::now()).to_std().unwrap(),
+                                (*expires_at - Utc::now()).to_std().unwrap(),
                                 |_act, ctx| {
                                     ctx.stop()
                                 }
