@@ -3,6 +3,7 @@
     <words>
       <w>bcrypt</w>
       <w>multer</w>
+      <w>smtp</w>
       <w>subcommand</w>
     </words>
   </dictionary>

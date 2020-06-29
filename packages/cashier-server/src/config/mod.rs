@@ -41,6 +41,14 @@ pub struct MediaConfig {
 }
 
 #[derive(Debug, Clone)]
+pub struct SmtpConfig {
+    pub server: String,
+    pub sender: String,
+    pub username: Option<String>,
+    pub password: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct StartConfig {
     pub db: String,
     pub redis: String,

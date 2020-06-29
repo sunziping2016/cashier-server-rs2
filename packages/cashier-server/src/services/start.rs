@@ -29,7 +29,7 @@ pub enum StartError {
     #[error(display = "{}", _0)]
     Io(#[error(source)] #[error(from)] std::io::Error),
     #[error(display = "{}", _0)]
-    Redis(#[error(source)] #[error(from)] RedisError)
+    Redis(#[error(source)] #[error(from)] RedisError),
 }
 
 pub type Result<T> = std::result::Result<T, StartError>;

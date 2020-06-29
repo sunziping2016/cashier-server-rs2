@@ -12,7 +12,6 @@ actix-rt = "1.1"
 actix-web = "2.0"
 actix-web-actors = "2.0"
 actix-web-validator = "1.0.0"
-async-smtp = "0.3.2"
 bcrypt = "0.8.0"
 chrono = { version = "0.4", features = ["serde"] }
 clap = "3.0.0-beta.1"
@@ -24,6 +23,7 @@ image = "0.23.5"
 Inflector = "*"
 jsonwebtoken = "7.1.1"
 lazy_static = "1.4.0"
+lettre = "0.10.0-alpha.1"
 log = "0.4.8"
 mime = "0.3"
 multer = { path = "../multer" }
@@ -31,6 +31,7 @@ redis = "0.16.0"
 regex = "1"
 rand = "0.7.3"
 rpassword = "4.0.5"
+rustls= "0.17.0"
 serde = { version = "1.0.111", features = ["derive"] }
 serde_json = "1.0"
 shell-macro = { path = "../shell-macro" }
@@ -41,3 +42,4 @@ tokio-postgres = { version = "0.5.4", features = ["with-chrono-0_4"] }
 unzip-n = "0.1.1"
 validator = "0.10"
 validator_derive = "0.10"
+webpki-roots = "0.20.0"

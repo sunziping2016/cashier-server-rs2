@@ -6,5 +6,11 @@
     "root": "media",
     "url": "/media",
     "serve": true
+  },
+  "smtp": {
+    "server": "smtp.example.com",
+    "sender": "Cashier <cashier@example.com>",
+    "username": "cashier@example.com",
+    "password": "password"
   }
 }
