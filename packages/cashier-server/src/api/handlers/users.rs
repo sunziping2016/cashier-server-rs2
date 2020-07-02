@@ -21,13 +21,15 @@ use crate::{
             PopulateUser,
             PopulateRole,
             PopulatePermission,
+            RegistrationId,
+            RegistrationCode,
         },
     },
     queries::{
         errors::Error as QueryError,
         users::{
             UserAccessLevel, RoleAccessLevel, PermissionAccessLevel,
-            User, Role, Permission,
+            User, Role, Permission, UserRegistrationPublic,
         },
     },
     websocket::push_messages::{UserCreated, UserUpdated},
@@ -385,6 +387,185 @@ async fn read_user(
     read_user_impl(app_data, request, uid).await
 }
 
+#[derive(Debug, Validate, Deserialize)]
+struct RegisterUserRequest {
+    #[validate]
+    username: Username,
+    #[validate]
+    email: Email,
+    #[validate]
+    password: Password,
+}
+
+#[derive(Debug, Serialize)]
+struct RegisterUserResponse {
+    id: String,
+    created_at: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+}
+
+async fn register_user(
+    app_data: web::Data<AppState>,
+    request: ValidatedJson<RegisterUserRequest>,
+    auth: Auth,
+) -> ApiResult<RegisterUserResponse> {
+    auth.try_permission("user", "register")?;
+    let result = app_data.query.user
+        .register_user(
+            &*app_data.db.read().await, app_data.clone(),
+            &app_data.config.smtp.sender, &app_data.config.site,
+            &request.username[..], &request.email[..], &request.password[..],
+        )
+        .await
+        .map_err(|err| match err {
+            QueryError::DuplicatedUser { field } => ApiError::DuplicatedUser { field },
+            e => internal_server_error!(e),
+        })?;
+    respond(RegisterUserResponse {
+        id: result.id,
+        created_at: result.created_at,
+        expires_at: result.expires_at,
+    })
+}
+
+#[derive(Debug, Validate, Deserialize)]
+struct ConfirmRegistrationRequest {
+    #[validate]
+    id: RegistrationId,
+    #[validate]
+    code: RegistrationCode,
+}
+
+async fn confirm_registration(
+    app_data: web::Data<AppState>,
+    request: ValidatedJson<ConfirmRegistrationRequest>,
+    auth: Auth,
+) -> ApiResult<()> {
+    auth.try_permission("user", "confirm-registration")?;
+    app_data.query.user
+        .confirm_registration(&mut *app_data.db.write().await,
+                              &request.id[..], &request.code[..])
+        .await
+        .map_err(|err| match err {
+            QueryError::UserRegistrationNotFound => ApiError::UserRegistration { reason: "NotFound".into() },
+            QueryError::UserRegistrationExpired => ApiError::UserRegistration { reason: "Expired".into() },
+            QueryError::UserRegistrationWrongCode => ApiError::UserRegistration { reason: "WrongCode".into() },
+            QueryError::DuplicatedUser { field } => ApiError::DuplicatedUser { field },
+            e => internal_server_error!(e),
+        })?;
+    respond(())
+}
+
+#[derive(Debug, Validate, Deserialize)]
+struct CheckUsernameExistenceRequest {
+    #[validate]
+    username: Username,
+}
+
+#[derive(Debug, Validate, Deserialize)]
+struct CheckEmailExistenceRequest {
+    #[validate]
+    email: Email,
+}
+
+#[derive(Debug, Serialize)]
+struct CheckExistenceResponse {
+    exists: bool,
+}
+
+async fn check_username_existence(
+    app_data: web::Data<AppState>,
+    request: ValidatedQuery<CheckUsernameExistenceRequest>,
+    auth: Auth,
+) -> ApiResult<CheckExistenceResponse> {
+    auth.try_permission("user-username", "check-existence")?;
+    let exists = app_data.query.user
+        .check_username_existence(&*app_data.db.read().await, &request.username[..])
+        .await
+        .map_err(|e| internal_server_error!(e))?;
+    respond(CheckExistenceResponse {
+        exists
+    })
+}
+
+async fn check_email_existence(
+    app_data: web::Data<AppState>,
+    request: ValidatedQuery<CheckEmailExistenceRequest>,
+    auth: Auth,
+) -> ApiResult<CheckExistenceResponse> {
+    auth.try_permission("user-username", "check-existence")?;
+    let exists = app_data.query.user
+        .check_email_existence(&*app_data.db.read().await, &request.email[..])
+        .await
+        .map_err(|e| internal_server_error!(e))?;
+    respond(CheckExistenceResponse {
+        exists
+    })
+}
+
+#[derive(Debug, Validate, Deserialize)]
+struct QueryRegistrationRequest {
+    #[validate]
+    id: RegistrationId,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "status")]
+enum QueryRegistrationResponse {
+    NotFound,
+    Expired,
+    Processing(UserRegistrationPublic),
+    Passed(UserRegistrationPublic),
+    Rejected(UserRegistrationPublic),
+}
+
+async fn query_registration(
+    app_data: web::Data<AppState>,
+    request: ValidatedQuery<QueryRegistrationRequest>,
+    auth: Auth,
+) -> ApiResult<QueryRegistrationResponse> {
+    auth.try_permission("user", "query-registration")?;
+    let result = match app_data.query.user
+        .query_registration(&*app_data.db.read().await, &request.id[..])
+        .await {
+        Ok(value) => match value.completed {
+            Some(true) => QueryRegistrationResponse::Passed(value),
+            Some(false) => QueryRegistrationResponse::Rejected(value),
+            None => QueryRegistrationResponse::Processing(value),
+        },
+        Err(QueryError::UserRegistrationExpired) => QueryRegistrationResponse::Expired,
+        Err(QueryError::UserRegistrationNotFound) => QueryRegistrationResponse::NotFound,
+        Err(e) => return Err(internal_server_error!(e)),
+    };
+    respond(result)
+}
+
+#[derive(Debug, Validate, Deserialize)]
+struct ResendRegistrationEmailRequest {
+    #[validate]
+    id: RegistrationId,
+}
+
+async fn resend_registration_email(
+    app_data: web::Data<AppState>,
+    request: ValidatedJson<ResendRegistrationEmailRequest>,
+    auth: Auth,
+) -> ApiResult<()> {
+    auth.try_permission("user", "resend-registration-email")?;
+    app_data.query.user
+        .resend_registration_email(
+            &*app_data.db.read().await, app_data.clone(),
+            &app_data.config.smtp.sender, &app_data.config.site,
+            &request.id[..])
+        .await
+        .map_err(|err| match err {
+            QueryError::UserRegistrationNotFound => ApiError::UserRegistration { reason: "NotFound".into() },
+            QueryError::UserRegistrationExpired => ApiError::UserRegistration { reason: "Expired".into() },
+            e => internal_server_error!(e),
+        })?;
+    respond(())
+}
+
 pub fn users_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::ServiceConfig)> {
     if let Err(e) = std::fs::create_dir_all(Path::new(&state.config.media.root)
         .join(crate::constants::AVATAR_FOLDER))  {
@@ -396,7 +577,12 @@ pub fn users_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::Servic
             web::scope("users")
                 .app_data(state.clone())
                 .app_data(default_json_config())
-                // .route("/public", web::get().to(index))
+                .route("/register", web::post().to(register_user))
+                .route("/confirm-registration", web::post().to(confirm_registration))
+                .route("/query-registration", web::get().to(query_registration))
+                .route("/resend-registration-email", web::post().to(resend_registration_email))
+                .route("/check-username-existence", web::get().to(check_username_existence))
+                .route("/check-email-existence", web::get().to(check_email_existence))
                 // .route("/me/password", web::post().to(index))
                 .service(
                     web::scope("/me/avatar")

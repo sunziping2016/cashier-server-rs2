@@ -2,6 +2,7 @@
   "bind": "localhost:8000",
   "db": "postgresql://cashier@localhost/cashier",
   "redis": "redis://localhost/",
+  "site": "http://localhost:8080",
   "media": {
     "root": "media",
     "url": "/media",

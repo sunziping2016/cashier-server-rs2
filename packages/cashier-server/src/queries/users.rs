@@ -1,13 +1,29 @@
 use super::errors::{Error, Result};
-use actix_web::web::block;
+use super::email::register_user_email;
+use actix_web::web::{self, block};
 use chrono::{DateTime, Utc};
 use derive_more::From;
+use lettre::Transport;
+use rand::{Rng, thread_rng};
+use rand::distributions::{Alphanumeric, Distribution};
 use serde::{Serialize, Deserialize};
 use std::collections::{HashSet, HashMap};
+use std::iter;
 use tokio_postgres::{
     Client, Statement, types::Type,
     IsolationLevel, Row,
 };
+use crate::api::app_state::AppState;
+
+struct Digit;
+
+impl Distribution<char> for Digit {
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> char {
+        const RANGE: u32 = 10;
+        const GEN_ASCII_STR_CHARSET: &[u8] = b"0123456789";
+        GEN_ASCII_STR_CHARSET[(rng.next_u32() % RANGE) as usize] as char
+    }
+}
 
 pub trait HasId {
     fn get_id(&self) -> i32;
@@ -396,9 +412,42 @@ impl Default for PermissionTree {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+pub struct UserRegistration {
+    pub id: String,
+    pub code: String,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct UserRegistrationPublic {
+    pub id: String,
+    pub username: String,
+    pub email: String,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub completed: Option<bool>,
+}
+
+impl From<&Row> for UserRegistrationPublic {
+    fn from(row: &Row) -> Self {
+        Self {
+            id: row.get("id"),
+            username: row.get("username"),
+            email: row.get("email"),
+            created_at: row.get("created_at"),
+            expires_at: row.get("expires_at"),
+            completed: row.get("completed"),
+        }
+    }
+}
+
 pub struct Query {
     find_one_from_username_to_id_password_blocked: Statement,
     find_one_from_email_to_id_password_blocked: Statement,
+    find_one_from_username_to_id: Statement,
+    find_one_from_email_to_id: Statement,
     check_user_blocked: Statement,
     fetch_permission: Statement,
     fetch_default_permission: Statement,
@@ -419,6 +468,13 @@ pub struct Query {
     find_permissions_all: Statement,
     fetch_permission_tree: Statement,
     fetch_default_permission_tree: Statement,
+    insert_one_into_user_registration: Statement,
+    find_one_from_user_registration: Statement,
+    find_one_from_user_registration_without_password: Statement,
+    insert_one_registered_user: Statement,
+    insert_one_default_roles: Statement,
+    complete_registration: Statement,
+    query_registration: Statement,
 }
 
 impl Query {
@@ -430,6 +486,16 @@ impl Query {
         ).await.unwrap();
         let find_one_from_email_to_id_password_blocked = client.prepare_typed(
             "SELECT id, password, blocked FROM \"user\" \
+                WHERE email = $1 AND NOT deleted LIMIT 1",
+            &[Type::TEXT],
+        ).await.unwrap();
+        let find_one_from_username_to_id = client.prepare_typed(
+            "SELECT id FROM \"user\" \
+                WHERE username = $1 AND NOT deleted LIMIT 1",
+            &[Type::TEXT],
+        ).await.unwrap();
+        let find_one_from_email_to_id = client.prepare_typed(
+            "SELECT id FROM \"user\" \
                 WHERE email = $1 AND NOT deleted LIMIT 1",
             &[Type::TEXT],
         ).await.unwrap();
@@ -473,7 +539,7 @@ impl Query {
         ).await.unwrap();
         let insert_one = client.prepare_typed(
             "INSERT INTO \"user\" (username, password, email, nickname, \
-                                       created_at, updated_at, deleted) \
+                                   created_at, updated_at, deleted) \
                 VALUES ($1, $2, $3, $4, NOW(), NOW(), false) \
                 RETURNING id, created_at",
             &[Type::TEXT, Type::TEXT, Type::TEXT, Type::TEXT],
@@ -490,7 +556,7 @@ impl Query {
             &[Type::INT4],
         ).await.unwrap();
         let update_avatars = client.prepare_typed(
-            "UPDATE \"user\" SET avatar = $1, avatar128 = $2 \
+            "UPDATE \"user\" SET avatar = $1, avatar128 = $2, updated_at = NOW() \
                 WHERE id = $3 AND NOT deleted \
                 RETURNING updated_at",
             &[Type::TEXT, Type::TEXT, Type::INT4]
@@ -564,9 +630,51 @@ impl Query {
                 WHERE role.name = 'default' AND NOT role.deleted AND role.id = role_permission.role \
                 AND role_permission.permission = permission.id AND NOT permission.deleted"
         ).await.unwrap();
+        let insert_one_into_user_registration = client.prepare_typed(
+            &format!("INSERT INTO user_registration (id, code, username, password, \
+                                                     email, created_at, expires_at) \
+                VALUES ($1, $2, $3, $4, $5, NOW(), NOW() + INTERVAL '{}') \
+                RETURNING created_at, expires_at", crate::constants::USER_REGISTRATION_EXPIRE),
+            &[Type::TEXT, Type::TEXT, Type::TEXT, Type::TEXT, Type::TEXT],
+        ).await.unwrap();
+        let find_one_from_user_registration = client.prepare_typed(
+            "SELECT code, username, password, email, expires_at FROM user_registration \
+            WHERE id = $1 AND completed IS NULL LIMIT 1",
+            &[Type::TEXT]
+        ).await.unwrap();
+        let find_one_from_user_registration_without_password = client.prepare_typed(
+            "SELECT code, username, email, expires_at FROM user_registration \
+            WHERE id = $1 AND completed IS NULL LIMIT 1",
+            &[Type::TEXT]
+        ).await.unwrap();
+        let insert_one_registered_user = client.prepare_typed(
+            "INSERT INTO \"user\" (username, password, email, \
+                                   created_at, updated_at, deleted) \
+                VALUES ($1, $2, $3, NOW(), NOW(), false) \
+                RETURNING id, created_at",
+            &[Type::TEXT, Type::TEXT, Type::TEXT],
+        ).await.unwrap();
+        let insert_one_default_roles = client.prepare_typed(
+            "INSERT INTO user_role (\"user\", role) \
+                SELECT $1, id FROM role \
+                WHERE \"default\" = TRUE AND NOT deleted",
+            &[Type::INT4],
+        ).await.unwrap();
+        let complete_registration = client.prepare_typed(
+            "UPDATE user_registration SET completed = TRUE \
+             WHERE id = $1 AND completed IS NULL",
+            &[Type::TEXT],
+        ).await.unwrap();
+        let query_registration = client.prepare_typed(
+            "SELECT id, username, email, created_at, expires_at, completed \
+            FROM user_registration WHERE id = $1 LIMIT 1",
+            &[Type::TEXT]
+        ).await.unwrap();
         Self {
             find_one_from_username_to_id_password_blocked,
             find_one_from_email_to_id_password_blocked,
+            find_one_from_username_to_id,
+            find_one_from_email_to_id,
             check_user_blocked,
             fetch_permission,
             fetch_default_permission,
@@ -587,6 +695,13 @@ impl Query {
             find_permissions_all,
             fetch_permission_tree,
             fetch_default_permission_tree,
+            insert_one_into_user_registration,
+            find_one_from_user_registration,
+            find_one_from_user_registration_without_password,
+            insert_one_registered_user,
+            insert_one_default_roles,
+            complete_registration,
+            query_registration,
         }
     }
     pub async fn find_one_from_username_to_id_password_blocked(
@@ -900,5 +1015,153 @@ impl Query {
                 });
         }
         Ok(PermissionTree::new(tree))
+    }
+    pub async fn check_username_existence(
+        &self, client: &Client, username: &str,
+    ) -> Result<bool> {
+        let rows = client
+            .query(&self.find_one_from_username_to_id, &[&username])
+            .await?;
+        Ok(!rows.is_empty())
+    }
+    pub async fn check_email_existence(
+        &self, client: &Client, email: &str,
+    ) -> Result<bool> {
+        let rows = client
+            .query(&self.find_one_from_email_to_id, &[&email])
+            .await?;
+        Ok(!rows.is_empty())
+    }
+    pub async fn register_user(
+        &self, client: &Client,
+        app_data: web::Data<AppState>, // for smtp
+        sender: &str, site: &str,
+        username: &str, email: &str, password: &str,
+    ) -> Result<UserRegistration> {
+        let duplicated_rows = client
+            .query(&self.find_one_from_username_email_to_username_email,
+                   &[&username, &email])
+            .await?;
+        if let Some(row) = duplicated_rows.get(0) {
+            return Err(Error::DuplicatedUser {
+                field: if row.get::<&str, String>("username") == username { "username".into() }
+                else { "email".into() }
+            });
+        }
+        let mut rng = thread_rng();
+        let id: String = iter::repeat(())
+            .map(|()| rng.sample(Alphanumeric))
+            .take(24)
+            .collect();
+        let code: String = iter::repeat(())
+            .map(|()| rng.sample(Digit))
+            .take(6)
+            .collect();
+        let message = register_user_email(sender.parse()?, email.parse()?,
+                                        site, username, &id, &code)?;
+        block(move || app_data.smtp.send(&message))
+            .await?;
+        let password = String::from(password);
+        let password = block(move || bcrypt::hash(password, crate::constants::BCRYPT_COST))
+            .await?;
+        let row = client
+            .query_one(&self.insert_one_into_user_registration,
+                       &[&id, &code, &username, &password, &email])
+            .await?;
+        Ok(UserRegistration {
+            id,
+            code,
+            created_at: row.get("created_at"),
+            expires_at: row.get("expires_at"),
+        })
+    }
+    pub async fn confirm_registration(
+        &self, client: &mut Client, id: &str, code: &str,
+    ) -> Result<UserIdCreatedAt> {
+        let transaction = client.build_transaction()
+            .isolation_level(IsolationLevel::RepeatableRead)
+            .start()
+            .await?;
+        let rows = transaction
+            .query(&self.find_one_from_user_registration, &[&id])
+            .await?;
+        let row = rows
+            .get(0)
+            .ok_or_else(|| Error::UserRegistrationNotFound)?;
+        let real_code: String = row.get("code");
+        let username: String = row.get("username");
+        let password: String = row.get("password");
+        let email: String = row.get("email");
+        let expires_at: DateTime<Utc> = row.get("expires_at");
+        if expires_at < Utc::now() {
+            return Err(Error::UserRegistrationExpired);
+        }
+        if real_code != code {
+            return Err(Error::UserRegistrationWrongCode);
+        }
+        let duplicated_rows = transaction
+            .query(&self.find_one_from_username_email_to_username_email,
+                   &[&username, &email])
+            .await?;
+        if let Some(row) = duplicated_rows.get(0) {
+            return Err(Error::DuplicatedUser {
+                field: if row.get::<&str, String>("username") == username { "username".into() }
+                else { "email".into() }
+            });
+        }
+        let user = transaction
+            .query_one(&self.insert_one_registered_user, &[&username, &password, &email])
+            .await?;
+        let user_id: i32 = user.get("id");
+        transaction
+            .query(&self.insert_one_default_roles, &[&user_id])
+            .await?;
+        transaction
+            .query(&self.complete_registration, &[&id])
+            .await?;
+        transaction.commit().await?;
+        Ok(UserIdCreatedAt {
+            id: user_id,
+            created_at: user.get("created_at"),
+        })
+    }
+    pub async fn query_registration(
+        &self, client: &Client, id: &str,
+    ) -> Result<UserRegistrationPublic> {
+        let rows = client
+            .query(&self.query_registration, &[&id])
+            .await?;
+        let row = rows
+            .get(0)
+            .ok_or_else(|| Error::UserRegistrationNotFound)?;
+        let registration = UserRegistrationPublic::from(row);
+        if registration.completed.is_none() && registration.expires_at < Utc::now() {
+            return Err(Error::UserRegistrationExpired);
+        }
+        Ok(registration)
+    }
+    pub async fn resend_registration_email(
+        &self, client: &Client,
+        app_data: web::Data<AppState>,
+        sender: &str, site: &str, id: &str,
+    ) -> Result<()> {
+        let rows = client
+            .query(&self.find_one_from_user_registration_without_password, &[&id])
+            .await?;
+        let row = rows
+            .get(0)
+            .ok_or_else(|| Error::UserRegistrationNotFound)?;
+        let code: String = row.get("code");
+        let username: String = row.get("username");
+        let email: String = row.get("email");
+        let expires_at: DateTime<Utc> = row.get("expires_at");
+        if expires_at < Utc::now() {
+            return Err(Error::UserRegistrationExpired);
+        }
+        let message = register_user_email(sender.parse()?, email.parse()?,
+                                          site, &username, &id, &code)?;
+        block(move || app_data.smtp.send(&message))
+            .await?;
+        Ok(())
     }
 }

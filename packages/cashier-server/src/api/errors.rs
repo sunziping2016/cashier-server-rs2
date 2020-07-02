@@ -73,6 +73,10 @@ pub enum ApiError {
     },
     #[error(display = "cannot find the user")]
     UserNotFound,
+    #[error(display = "user registration {}", reason)]
+    UserRegistration {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -191,7 +195,8 @@ impl From<ApiError> for ApiErrorWrapper {
             | ApiError::MultipartPayloadError { .. }
             | ApiError::ValidationError { .. }
             | ApiError::MissingAuthorizationHeader
-            | ApiError::AvatarError{ .. } => 400,
+            | ApiError::AvatarError{ .. }
+            | ApiError::UserRegistration { .. } => 400,
             ApiError::DuplicatedUser { .. } => 409,
             ApiError::UserNotFound => 404,
         };
@@ -222,7 +227,8 @@ impl ResponseError for ApiError {
             | ApiError::MultipartPayloadError { .. }
             | ApiError::ValidationError { .. }
             | ApiError::MissingAuthorizationHeader
-            | ApiError::AvatarError{ .. } =>
+            | ApiError::AvatarError { .. }
+            | ApiError::UserRegistration { .. } =>
                 HttpResponse::BadRequest().json(ApiErrorWrapper::from(self.clone())),
             ApiError::DuplicatedUser { .. } =>
                 HttpResponse::Conflict().json(ApiErrorWrapper::from(self.clone())),

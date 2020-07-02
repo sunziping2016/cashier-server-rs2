@@ -1,6 +1,7 @@
 pub mod errors;
 pub mod users;
 pub mod tokens;
+pub mod email;
 
 use tokio_postgres::{
     Client,

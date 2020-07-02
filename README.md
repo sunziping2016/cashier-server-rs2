@@ -8,10 +8,10 @@ A permission represents the ability to do one action. If a user has a role (incl
 |---|---|---|
 |subject|String|the subject of the permission|
 |action|String|the action of the permission|
-|displayName|String|a name for display purpose|
+|display_name|String|a name for display purpose|
 |description|String|a more detailed explanation|
-|createdAt|Date|the time to create the permission|
-|updatedAt|Date|last time to update the permission|
+|created_at|Date|the time to create the permission|
+|updated_at|Date|last time to update the permission|
 |deleted|Boolean|whether the permission is deleted|
 
 All fields are required.
@@ -24,10 +24,10 @@ A role consists of several mutually related permissions.
 |---|---|---|
 |name|String|the name of the role|
 |permissions|Array\<ObjectId\>|permissions of the role|
-|displayName|String|a name for display purpose|
+|display_name|String|a name for display purpose|
 |description|String|a more detailed explanation|
-|createdAt|Date|the time to create the role|
-|updatedAt|Date|last time to update the role|
+|created_at|Date|the time to create the role|
+|updated_at|Date|last time to update the role|
 |deleted|Boolean|whether the role is deleted|
 
 All fields are required.
@@ -44,8 +44,8 @@ All fields are required.
 |avatar|String|path to the avatar|false|true|
 |avatar128|String|path to a square 128x128 avatar|false|true|
 |blocked|Boolean|whether the user is blocked|false|false|
-|createdAt|Date|the time to create the user|true|true|
-|updatedAt|Date|last time to update the user|true|false|
+|created_at|Date|the time to create the user|true|true|
+|updated_at|Date|last time to update the user|true|false|
 |deleted|Boolean|whether the user is deleted|true|false|
 
 User's public information can be accessed via `/api/v1/users/public`. `password` is never accessible.
@@ -57,9 +57,9 @@ User's public information can be accessed via `/api/v1/users/public`. `password`
 |Key|Type|Description|
 |---|---|---|
 |user|ObjectId|user who owns the token|
-|issuedAt|Date|the time to create the token|
-|expiresAt|Date|the time when the token expires|
-|acquireMethod|String|method to acquire the token|
+|issued_at|Date|the time to create the token|
+|expires_at|Date|the time when the token expires|
+|acquire_method|String|method to acquire the token|
 |invoked|bool|whether jwt is invoked|
 
 All fields are required.
@@ -70,16 +70,29 @@ There should exists one single document in `globalSettings` document.
 
 |Key|Type|Description|
 |---|---|---|
-|jwtSecret|Binary|256-byte random secret for JWT|
-|createdAt|Date|the time to create the global settings|
-|updatedAt|Date|last time to update the global settings|
+|jwt_secret|Binary|256-byte random secret for JWT|
+|created_at|Date|the time to create the global settings|
+|updated_at|Date|last time to update the global settings|
 
 All fields are required.
+
+### 1.6 User Registration
+
+|Key|Type|Description|
+|---|---|---|
+|id|String|24-byte randomly generated token|
+|code|String|6-byte randomly generated digital code|
+|username|String|the username of the user|
+|password|String|the password of the user|
+|email|String|the email of the user|
+|created_at|Date|the time to create the user|
+|expires_at|Date|last time to update the user|
+|completed|Boolean|`null` for not completed, `false` for rejected, `true` for completed|
 
 ## 2 TODO
 
 - [x] Multipart
-- [ ] WebSocket
+- [x] WebSocket
 - [ ] Captcha
 
 ## 3 WebSocket实现
@@ -99,3 +112,7 @@ jwt如果被revoke，user如果被删除或block，ClientSubscriber收到这个�
 需要提供一个简单的函数，供所有的API发起消息到redis中，并附带上uid和jti数据。
 
 未来考虑添加一个额外的表：用户<->监听的用户权限。第二个键cascade删除。然后实现用户选择收到某个推送。
+
+## 4 用户注册流程
+
+提供API查询用户名或密码是否被占用。如果被占用则报错。通过验证后，生成随机的长度为40的ID串以及6位数字密码。发送邮件给用户，其中邮件包含数字密码。邮件发送成功后，写入临时用户表，`completed`为`null`。而后id返回给前端。验证时，将id和验证码POST到后端，后端从`completed`为`null`，id为指定id的临时用户表中读取数据，确认是否expire，确认验证码是否正确，，再次确认用户名和密码是否被占用，如果成功后创建用户，并且置`completed`为true，这部分需要repeated read隔离等级。

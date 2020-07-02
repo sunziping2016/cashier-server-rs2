@@ -52,6 +52,20 @@ pub struct Nickname {
 
 #[derive(Debug, Validate, Serialize, Deserialize, Deref, AsRef, From, Into, Clone)]
 #[serde(transparent)]
+pub struct RegistrationId {
+    #[validate(length(equal = 24, message = "should have 24 chars"))]
+    inner: String,
+}
+
+#[derive(Debug, Validate, Serialize, Deserialize, Deref, AsRef, From, Into, Clone)]
+#[serde(transparent)]
+pub struct RegistrationCode {
+    #[validate(length(equal = 6, message = "should have 6 chars"))]
+    inner: String,
+}
+
+#[derive(Debug, Validate, Serialize, Deserialize, Deref, AsRef, From, Into, Clone)]
+#[serde(transparent)]
 pub struct Id {
     id: i32,
 }

@@ -53,7 +53,9 @@ pub struct StartConfig {
     pub db: String,
     pub redis: String,
     pub bind: String,
+    pub site: String,
     pub media: MediaConfig,
+    pub smtp: SmtpConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -80,11 +82,32 @@ impl MediaConfigFile {
 }
 
 #[derive(Serialize, Deserialize)]
+pub struct SmtpConfigFile {
+    pub server: Option<String>,
+    pub sender: Option<String>,
+    pub username: Option<String>,
+    pub password: Option<String>,
+}
+
+impl SmtpConfigFile {
+    pub fn new() -> Self {
+        Self {
+            server: None,
+            sender: None,
+            username: None,
+            password: None,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct ConfigFile {
     db: Option<String>,
     redis: Option<String>,
     bind: Option<String>,
+    site: Option<String>,
     media: Option<MediaConfigFile>,
+    smtp: Option<SmtpConfigFile>,
 }
 
 impl ConfigFile {
@@ -93,7 +116,9 @@ impl ConfigFile {
             db: None,
             redis: None,
             bind: None,
+            site: None,
             media: None,
+            smtp: None,
         }
     }
 
@@ -139,6 +164,10 @@ impl Config {
                 .value_name("ADDR:PORT")
                 .about("Address to bind")
                 .takes_value(true))
+            .arg(Arg::with_name("site")
+                .long("site")
+                .about("Site for front-end")
+                .takes_value(true))
             .arg(Arg::with_name("media-root")
                 .long("media-root")
                 .value_name("PATH")
@@ -152,6 +181,22 @@ impl Config {
             .arg(Arg::with_name("media-serve")
                 .long("media-serve")
                 .about("Serves user-uploaded contents"))
+            .arg(Arg::with_name("smtp-server")
+                .long("smtp-server")
+                .about("SMTP server used to send e-mail")
+                .takes_value(true))
+            .arg(Arg::with_name("smtp-sender")
+                .long("smtp-sender")
+                .about("SMTP sender information in the \"From\" header")
+                .takes_value(true))
+            .arg(Arg::with_name("smtp-username")
+                .long("smtp-username")
+                .about("SMTP username for authentication")
+                .takes_value(true))
+            .arg(Arg::with_name("smtp-password")
+                .long("smtp-password")
+                .about("SMTP password for authentication")
+                .takes_value(true))
             .subcommand(App::new("init")
                 .about("Initializes all databases")
                 .arg(Arg::with_name("reset")
@@ -177,6 +222,7 @@ impl Config {
         config_file.db = matches.value_of("db").map(String::from).or(config_file.db);
         config_file.redis = matches.value_of("redis").map(String::from).or(config_file.redis);
         config_file.bind = matches.value_of("bind").map(String::from).or(config_file.bind);
+        config_file.site = matches.value_of("site").map(String::from).or(config_file.site);
         let mut default_media_config_file = MediaConfigFile::new();
         let media_config_file = config_file.media.as_mut()
             .unwrap_or(&mut default_media_config_file);
@@ -187,6 +233,17 @@ impl Config {
         if matches.is_present("media-serve") {
             media_config_file.serve = Some(true);
         }
+        let mut default_smtp_config_file = SmtpConfigFile::new();
+        let smtp_config_file = config_file.smtp.as_mut()
+            .unwrap_or(&mut default_smtp_config_file);
+        smtp_config_file.server = matches.value_of("smtp-server").map(String::from)
+            .or(smtp_config_file.server.clone());
+        smtp_config_file.sender = matches.value_of("smtp-sender").map(String::from)
+            .or(smtp_config_file.sender.clone());
+        smtp_config_file.username = matches.value_of("smtp-username").map(String::from)
+            .or(smtp_config_file.username.clone());
+        smtp_config_file.password = matches.value_of("smtp-password").map(String::from)
+            .or(smtp_config_file.password.clone());
         match matches.subcommand() {
             ("init", Some(sub_matches)) => Ok(Config::Init(InitConfig {
                 db: config_file.db
@@ -204,13 +261,23 @@ impl Config {
                     .ok_or_else(|| ConfigError::MissingArgument("redis".into()))?,
                 bind: config_file.bind
                     .ok_or_else(|| ConfigError::MissingArgument("bind".into()))?,
+                site: config_file.site
+                    .ok_or_else(|| ConfigError::MissingArgument("site".into()))?,
                 media: MediaConfig {
                     root: media_config_file.root.clone()
                         .ok_or_else(|| ConfigError::MissingArgument("media.root".into()))?,
                     url: media_config_file.url.clone()
                         .ok_or_else(|| ConfigError::MissingArgument("media.url".into()))?,
                     serve: media_config_file.serve.contains(&true),
-                }
+                },
+                smtp: SmtpConfig {
+                    server: smtp_config_file.server.clone()
+                        .ok_or_else(|| ConfigError::MissingArgument("smtp.server".into()))?,
+                    sender: smtp_config_file.sender.clone()
+                        .ok_or_else(|| ConfigError::MissingArgument("smtp.sender".into()))?,
+                    username: smtp_config_file.username.clone(),
+                    password: smtp_config_file.password.clone(),
+                },
             })),
             _ => Err(ConfigError::InvalidSubcommand)
         }

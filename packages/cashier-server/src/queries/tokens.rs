@@ -47,12 +47,12 @@ pub struct TokenIdUser {
 
 impl Query {
     pub async fn new(client: &Client) -> Self {
-        let create_token = client.prepare_typed(&format!(
-            "INSERT INTO token (\"user\", issued_at, expires_at, acquire_method, \
-                                    acquire_host, acquire_remote, acquire_user_agent, revoked) \
+        let create_token = client.prepare_typed(
+            &format!("INSERT INTO token (\"user\", issued_at, expires_at, acquire_method, \
+                                         acquire_host, acquire_remote, acquire_user_agent, revoked) \
                 VALUES ($1, NOW(), NOW() + INTERVAL '{}', $2, $3, $4, $5, false) \
                 RETURNING id, issued_at, expires_at", crate::constants::JWT_EXPIRE),
-                                           &[Type::INT4, Type::TEXT, Type::TEXT, Type::TEXT, Type::TEXT],
+            &[Type::INT4, Type::TEXT, Type::TEXT, Type::TEXT, Type::TEXT],
         ).await.unwrap();
         let get_secret = client.prepare(
             "SELECT jwt_secret FROM global_settings LIMIT 1",

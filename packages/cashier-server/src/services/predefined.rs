@@ -43,7 +43,6 @@ pub const PREDEFINED_PERMISSIONS: &[PredefinedPermission] = &[
     PredefinedPermission("user", "update-self", "Update Self User", "Update user's own information via PATCH /api/users/me"),
     PredefinedPermission("user", "delete", "Delete User", "Delete a user via DELETE /api/users/:id"),
     PredefinedPermission("user", "delete-self", "Delete Self User", "Delete user's own account via DELETE /api/users/me"),
-    PredefinedPermission("user", "register", "Register User", "Register a new user via POST /api/users/register"),
     // CRUD for user's public information
     PredefinedPermission("user-public", "read", "Read User Public", "Read the public information of a user via GET /api/users/:id?populate=public"),
     PredefinedPermission("user-public", "list", "List User Public", "List all the users matching criteria with public information via GET /api/users?populate=public"),
@@ -80,6 +79,13 @@ pub const PREDEFINED_PERMISSIONS: &[PredefinedPermission] = &[
     PredefinedPermission("token-revoked", "subscribe", "Subscribe Token-Revoked", "Subscribe token revoked message"),
     PredefinedPermission("token-acquired-self", "subscribe", "Subscribe Self Token-Acquired", "Subscribe self token acquired message"),
     PredefinedPermission("token-revoked-self", "subscribe", "Subscribe Self Token-Revoked", "Subscribe self token revoked message"),
+    // User registration
+    PredefinedPermission("user", "register", "Register User", "Register a new user via POST /api/users/register"),
+    PredefinedPermission("user", "confirm-registration", "Confirm User Registration", "Confirm a user registration via POST /api/users/confirm-registration"),
+    PredefinedPermission("user", "query-registration", "Query User Registration", "Query a user registration status via GET /api/users/query-registration"),
+    PredefinedPermission("user", "resend-registration-email", "Resend User Registration E-mail", "Resend user registration email via POST /api/users/resend-registration-email"),
+    PredefinedPermission("user-username", "check-existence", "Check Username Existence", "Check whether username is occupied via GET /api/users/check-username-existence"),
+    PredefinedPermission("user-email", "check-existence", "Check E-mail Existence", "Check whether E-mail is occupied via POST /api/users/check-email-existence"),
 ];
 
 pub const PREDEFINED_ROLES: &[PredefinedRole] = &[
@@ -129,8 +135,13 @@ pub const PREDEFINED_ROLES: &[PredefinedRole] = &[
     ], "Normal User", "Manage users's own information", true),
     PredefinedRole("default", &[
         ("user", "register"),
+        ("user", "confirm-registration"),
+        ("user", "query-registration"),
+        ("user", "resend-registration-email"),
         ("token", "acquire-by-username"),
         ("token", "acquire-by-email"),
+        ("user-username", "check-existence"),
+        ("user-email", "check-existence"),
     ], "Default", "Every user including not logged-in ones implicitly has this role", false),
 ];
 

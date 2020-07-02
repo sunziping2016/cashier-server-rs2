@@ -9,6 +9,7 @@ use crate::{
 };
 use actix::{Addr, MailboxError};
 use chrono::Utc;
+use lettre::SmtpTransport;
 use std::result::Result;
 use tokio::sync::RwLock;
 
@@ -17,6 +18,7 @@ pub struct AppState {
     pub db: RwLock<tokio_postgres::Client>,
     pub query: Query,
     pub subscriber: Addr<MainSubscriber>,
+    pub smtp: SmtpTransport,
 }
 
 impl AppState {
