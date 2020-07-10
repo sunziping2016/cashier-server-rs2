@@ -19,11 +19,9 @@ pub struct PredefinedRole(
 // Me is for user to get own information.
 pub const PREDEFINED_PERMISSIONS: &[PredefinedPermission] = &[
     // CRUD for permissions
-    PredefinedPermission("permission", "create", "Create Permission", "Create new permission via POST /api/permissions"),
     PredefinedPermission("permission", "read", "Read Permission", "Read the information of a permission via GET /api/permissions/:id"),
     PredefinedPermission("permission", "list", "List Permission", "List all the permissions matching criteria via GET /api/permissions"),
     PredefinedPermission("permission", "update", "Update Permission", "Update the information of a permission via PATCH /api/permissions/:id"),
-    PredefinedPermission("permission", "delete", "Delete Permission", "Delete a permission via DELETE /api/permissions/:id"),
     // CRUD for roles
     PredefinedPermission("role", "create", "Create Role", "Create a new role via POST /api/roles"),
     PredefinedPermission("role", "read", "Read Role", "Read the information of a role via GET /api/roles/:id"),
@@ -51,7 +49,9 @@ pub const PREDEFINED_PERMISSIONS: &[PredefinedPermission] = &[
     PredefinedPermission("user-password", "update-self", "Update Self User Password", "Update user's password via POST /api/users/me/password"),
     // CRUD for user's avatar
     PredefinedPermission("user-avatar", "update", "Update Self User Avatar", "Update user's avatar via POST /api/users/:id/avatar"),
+    PredefinedPermission("user-avatar", "delete", "Delete Self User Avatar", "Delete user's avatar via DELETE /api/users/:id/avatar"),
     PredefinedPermission("user-avatar", "update-self", "Update Self User Avatar", "Update user's avatar via POST /api/users/me/avatar"),
+    PredefinedPermission("user-avatar", "delete-self", "Delete Self User Avatar", "Delete user's avatar via DELETE /api/users/me/avatar"),
     // CRUD for user's role
     PredefinedPermission("user-role", "update", "Update User's Role", "Update user's roles via POST /api/users/:id/roles"),
     // Subjects for user's roles
@@ -80,10 +80,10 @@ pub const PREDEFINED_PERMISSIONS: &[PredefinedPermission] = &[
     PredefinedPermission("token-acquired-self", "subscribe", "Subscribe Self Token-Acquired", "Subscribe self token acquired message"),
     PredefinedPermission("token-revoked-self", "subscribe", "Subscribe Self Token-Revoked", "Subscribe self token revoked message"),
     // User registration
-    PredefinedPermission("user", "register", "Register User", "Register a new user via POST /api/users/register"),
-    PredefinedPermission("user", "confirm-registration", "Confirm User Registration", "Confirm a user registration via POST /api/users/confirm-registration"),
-    PredefinedPermission("user", "query-registration", "Query User Registration", "Query a user registration status via GET /api/users/query-registration"),
-    PredefinedPermission("user", "resend-registration-email", "Resend User Registration E-mail", "Resend user registration email via POST /api/users/resend-registration-email"),
+    PredefinedPermission("registration", "create", "Register User", "Register a new user via POST /api/registrations"),
+    PredefinedPermission("registration", "read", "Query User Registration", "Query a user registration status via GET /api/registrations/{reg_id}"),
+    PredefinedPermission("registration", "confirm", "Confirm User Registration", "Confirm a user registration via POST /api/registrations/{reg_id}/confirm"),
+    PredefinedPermission("registration", "resend", "Resend User Registration E-mail", "Resend user registration email via POST /api/registrations/{reg_id}/resend"),
     PredefinedPermission("user-username", "check-existence", "Check Username Existence", "Check whether username is occupied via GET /api/users/check-username-existence"),
     PredefinedPermission("user-email", "check-existence", "Check E-mail Existence", "Check whether E-mail is occupied via POST /api/users/check-email-existence"),
 ];
@@ -111,6 +111,7 @@ pub const PREDEFINED_ROLES: &[PredefinedRole] = &[
         ("user", "delete"),
         ("user-password", "update"),
         ("user-avatar", "update"),
+        ("user-avatar", "delete"),
         ("token-acquired", "subscribe"),
         ("token-revoked", "subscribe"),
         ("user-created", "subscribe"),
@@ -124,6 +125,7 @@ pub const PREDEFINED_ROLES: &[PredefinedRole] = &[
         ("user-public", "list"),
         ("user-password", "update-self"),
         ("user-avatar", "update-self"),
+        ("user-avatar", "delete-self"),
         ("token", "resume"),
         ("token", "revoke-self"),
         ("token", "list-self"),
@@ -134,10 +136,10 @@ pub const PREDEFINED_ROLES: &[PredefinedRole] = &[
         ("token-revoked-self", "subscribe"),
     ], "Normal User", "Manage users's own information", true),
     PredefinedRole("default", &[
-        ("user", "register"),
-        ("user", "confirm-registration"),
-        ("user", "query-registration"),
-        ("user", "resend-registration-email"),
+        ("registration", "create"),
+        ("registration", "confirm"),
+        ("registration", "read"),
+        ("registration", "resend"),
         ("token", "acquire-by-username"),
         ("token", "acquire-by-email"),
         ("user-username", "check-existence"),

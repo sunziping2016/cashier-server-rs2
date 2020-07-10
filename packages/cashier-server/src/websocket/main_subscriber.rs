@@ -6,7 +6,7 @@ use actix::{
     WrapFuture, Recipient, ActorContext, ActorFuture, fut,
     ResponseActFuture,
 };
-use log::error;
+use log::{debug, error};
 use redis::{
     aio::{PubSub, Connection},
     Msg,
@@ -150,18 +150,18 @@ impl Handler<UpdateSubscribe> for MainSubscriber {
         } else {
             self.client2subject.insert(msg.client, msg.subjects);
         }
-        // // Debug
-        // debug!("subject2client:");
-        // for (subject, clients) in self.subject2client.iter() {
-        //     debug!("  {}: {}", subject, clients.len());
-        // }
-        // debug!("client2subject:");
-        // for (i, (_client, subjects)) in self.client2subject.iter().enumerate() {
-        //     debug!("  {:?}: {}", i, subjects.iter()
-        //         .map(|x| &x[..])
-        //         .collect::<Vec<_>>()
-        //         .join(", "));
-        // }
+        // Debug
+        debug!("subject2client:");
+        for (subject, clients) in self.subject2client.iter() {
+            debug!("  {}: {}", subject, clients.len());
+        }
+        debug!("client2subject:");
+        for (i, (_client, subjects)) in self.client2subject.iter().enumerate() {
+            debug!("  {:?}: {}", i, subjects.iter()
+                .map(|x| &x[..])
+                .collect::<Vec<_>>()
+                .join(", "));
+        }
         Ok(())
     }
 }

@@ -19,7 +19,7 @@ pub struct PermissionIdSubjectAction {
 }
 
 // From https://github.com/serde-rs/serde/issues/984#issuecomment-314143738
-fn double_option<'de, T, D>(de: D) -> Result<Option<Option<T>>, D::Error>
+pub fn double_option<'de, T, D>(de: D) -> Result<Option<Option<T>>, D::Error>
     where
         D: Deserializer<'de>,
         T: Deserialize<'de> {

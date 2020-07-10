@@ -14,6 +14,7 @@ use tokio_postgres::{
     IsolationLevel, Row,
 };
 use crate::api::app_state::AppState;
+use crate::queries::errors::Error::DuplicatedUser;
 
 struct Digit;
 
@@ -475,6 +476,7 @@ pub struct Query {
     insert_one_default_roles: Statement,
     complete_registration: Statement,
     query_registration: Statement,
+    update_user: Statement,
 }
 
 impl Query {
@@ -670,6 +672,18 @@ impl Query {
             FROM user_registration WHERE id = $1 LIMIT 1",
             &[Type::TEXT]
         ).await.unwrap();
+        let update_user = client.prepare_typed(
+            "UPDATE \"user\" \
+                SET username = CASE WHEN $1 THEN $2 ELSE username END, \
+                    email = CASE WHEN $3 THEN $4 ELSE email END, \
+                    nickname = CASE WHEN $5 THEN $6 ELSE nickname END, \
+                    blocked = CASE WHEN $7 THEN $8 ELSE blocked END, \
+                    updated_at = NOW() \
+                WHERE id = $9 AND NOT DELETED \
+                RETURNING updated_at",
+            &[Type::BOOL, Type::TEXT, Type::BOOL, Type::TEXT,
+                Type::BOOL, Type::TEXT, Type::BOOL, Type::BOOL, Type::INT4]
+        ).await.unwrap();
         Self {
             find_one_from_username_to_id_password_blocked,
             find_one_from_email_to_id_password_blocked,
@@ -702,6 +716,7 @@ impl Query {
             insert_one_default_roles,
             complete_registration,
             query_registration,
+            update_user,
         }
     }
     pub async fn find_one_from_username_to_id_password_blocked(
@@ -1163,5 +1178,55 @@ impl Query {
         block(move || app_data.smtp.send(&message))
             .await?;
         Ok(())
+    }
+    pub async fn update_user(
+        &self, client: &mut Client, id: i32,
+        username: &Option<String>, email: &Option<Option<String>>,
+        nickname: &Option<Option<String>>, blocked: &Option<Option<bool>>,
+    ) -> Result<DateTime<Utc>> {
+        let transaction = client.build_transaction()
+            .isolation_level(IsolationLevel::RepeatableRead)
+            .start()
+            .await?;
+        match username {
+            Some(username) => if transaction
+                .query(&self.find_one_from_username_to_id, &[&username])
+                .await?
+                .get(0)
+                .map(|x| x.get::<&str, i32>("id"))
+                .is_some() {
+                return Err(DuplicatedUser { field: "username".into() });
+            }
+            _ => ()
+        }
+        match email {
+            Some(Some(email)) => if transaction
+                .query(&self.find_one_from_email_to_id, &[&email])
+                .await?
+                .get(0)
+                .map(|x| x.get::<&str, i32>("id"))
+                .is_some() {
+                return Err(DuplicatedUser { field: "email".into() });
+            }
+            _ => ()
+        }
+        let enable_username = username.is_some();
+        let enable_email = email.is_some();
+        let enable_nickname = nickname.is_some();
+        let enable_blocked = blocked.is_some();
+        let rows = transaction
+            .query(&self.update_user,
+                   &[&enable_username, &username,
+                       &enable_email, &email.clone().flatten(),
+                       &enable_nickname, &nickname.clone().flatten(),
+                       &enable_blocked, &blocked.clone().flatten(),
+                   &id])
+            .await?;
+        let row = rows
+            .get(0)
+            .ok_or_else(|| Error::UserNotFound)?;
+        transaction.commit()
+            .await?;
+        Ok(row.get("updated_at"))
     }
 }

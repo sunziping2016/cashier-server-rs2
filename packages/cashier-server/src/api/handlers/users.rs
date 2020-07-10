@@ -32,7 +32,7 @@ use crate::{
             User, Role, Permission, UserRegistrationPublic,
         },
     },
-    websocket::push_messages::{UserCreated, UserUpdated},
+    websocket::push_messages::{UserCreated, UserUpdated, double_option},
     internal_server_error,
 };
 use actix_web::{
@@ -181,12 +181,12 @@ async fn upload_avatar_impl(
             .map(|_| rng.sample(Alphanumeric))
             .take(crate::constants::AVATAR_FILENAME_LENGTH)
             .collect::<String>();
-        let origin_filename = filename.clone() + ".png";
+        let origin_filename = format!("{}.{}x{}.png", filename, size, size);
         cropped_avatar.save_with_format(join_avatar_file(&root, &origin_filename),
                                         image::ImageFormat::Png)?;
         let thumbnail_filename = if size <= 128 { None } else {
             let thumbnail = cropped_avatar.resize(128, 128,image::imageops::FilterType::Triangle);
-            let thumbnail_filename = filename + ".thumb.png";
+            let thumbnail_filename = filename + ".thumb.128x128.png";
             thumbnail.save_with_format(join_avatar_file(&root, &thumbnail_filename),
                                        image::ImageFormat::Png)
                 .map_err(|e| {
@@ -276,6 +276,70 @@ async fn upload_avatar(
     auth.try_permission("user-avatar", "update")?;
     let uid = uid_path.uid.clone().into();
     upload_avatar_impl(app_data, uid, data, auth).await
+}
+
+async fn delete_avatar_impl(
+    app_data: web::Data<AppState>,
+    uid: i32,
+    auth: Auth,
+) -> ApiResult<()> {
+    // Fetch old avatars
+    let old_avatars = app_data.query.user
+        .fetch_avatars(&*app_data.db.read().await, uid)
+        .await
+        .map_err(|err| match err {
+            QueryError::UserNotFound => ApiError::UserNotFound,
+            e => internal_server_error!(e),
+        })?;
+    // Save new avatars to database
+    let updated_at = app_data.query.user
+        .update_avatars(&*app_data.db.read().await, uid, &None, &None)
+        .await
+        .map_err(|err| match err {
+            QueryError::UserNotFound => ApiError::UserNotFound,
+            e => internal_server_error!(e),
+        })?;
+    let root = &app_data.config.media.root;
+    // Remove old avatars
+    if let Some(old_avatar) = old_avatars.avatar.as_ref() {
+        remove_avatar_file(root, old_avatar);
+    }
+    if let Some(old_avatar128) = old_avatars.avatar128.as_ref() {
+        remove_avatar_file(root, old_avatar128);
+    }
+    app_data.send(UserUpdated {
+        id: uid,
+        username: None,
+        email: None,
+        password: None,
+        nickname: None,
+        avatar: Some(None),
+        avatar128: Some(None),
+        blocked: None,
+        updated_at: Some(updated_at),
+    }, &auth)
+        .await
+        .map_err(|e| internal_server_error!(e))?;
+    respond(())
+}
+
+async fn delete_avatar_for_me(
+    app_data: web::Data<AppState>,
+    auth: Auth,
+) -> ApiResult<()> {
+    auth.try_permission("user-avatar", "delete-self")?;
+    let uid = auth.claims.as_ref().ok_or_else(|| ApiError::MissingAuthorizationHeader)?.uid;
+    delete_avatar_impl(app_data, uid, auth).await
+}
+
+async fn delete_avatar(
+    app_data: web::Data<AppState>,
+    uid_path: ValidatedPath<UidPath>,
+    auth: Auth,
+) -> ApiResult<()> {
+    auth.try_permission("user-avatar", "update")?;
+    let uid = uid_path.uid.clone().into();
+    delete_avatar_impl(app_data, uid, auth).await
 }
 
 #[derive(Deserialize, Validate, Debug)]
@@ -409,7 +473,7 @@ async fn register_user(
     request: ValidatedJson<RegisterUserRequest>,
     auth: Auth,
 ) -> ApiResult<RegisterUserResponse> {
-    auth.try_permission("user", "register")?;
+    auth.try_permission("registration", "create")?;
     let result = app_data.query.user
         .register_user(
             &*app_data.db.read().await, app_data.clone(),
@@ -429,9 +493,13 @@ async fn register_user(
 }
 
 #[derive(Debug, Validate, Deserialize)]
-struct ConfirmRegistrationRequest {
+struct RegIdPath {
     #[validate]
-    id: RegistrationId,
+    reg_id: RegistrationId,
+}
+
+#[derive(Debug, Validate, Deserialize)]
+struct ConfirmRegistrationRequest {
     #[validate]
     code: RegistrationCode,
 }
@@ -439,12 +507,13 @@ struct ConfirmRegistrationRequest {
 async fn confirm_registration(
     app_data: web::Data<AppState>,
     request: ValidatedJson<ConfirmRegistrationRequest>,
+    path: ValidatedPath<RegIdPath>,
     auth: Auth,
 ) -> ApiResult<()> {
-    auth.try_permission("user", "confirm-registration")?;
+    auth.try_permission("registration", "confirm")?;
     app_data.query.user
         .confirm_registration(&mut *app_data.db.write().await,
-                              &request.id[..], &request.code[..])
+                              &path.reg_id[..], &request.code[..])
         .await
         .map_err(|err| match err {
             QueryError::UserRegistrationNotFound => ApiError::UserRegistration { reason: "NotFound".into() },
@@ -503,12 +572,6 @@ async fn check_email_existence(
     })
 }
 
-#[derive(Debug, Validate, Deserialize)]
-struct QueryRegistrationRequest {
-    #[validate]
-    id: RegistrationId,
-}
-
 #[derive(Debug, Serialize)]
 #[serde(tag = "status")]
 enum QueryRegistrationResponse {
@@ -521,12 +584,12 @@ enum QueryRegistrationResponse {
 
 async fn query_registration(
     app_data: web::Data<AppState>,
-    request: ValidatedQuery<QueryRegistrationRequest>,
+    path: ValidatedPath<RegIdPath>,
     auth: Auth,
 ) -> ApiResult<QueryRegistrationResponse> {
-    auth.try_permission("user", "query-registration")?;
+    auth.try_permission("registration", "read")?;
     let result = match app_data.query.user
-        .query_registration(&*app_data.db.read().await, &request.id[..])
+        .query_registration(&*app_data.db.read().await, &path.reg_id[..])
         .await {
         Ok(value) => match value.completed {
             Some(true) => QueryRegistrationResponse::Passed(value),
@@ -540,23 +603,17 @@ async fn query_registration(
     respond(result)
 }
 
-#[derive(Debug, Validate, Deserialize)]
-struct ResendRegistrationEmailRequest {
-    #[validate]
-    id: RegistrationId,
-}
-
 async fn resend_registration_email(
     app_data: web::Data<AppState>,
-    request: ValidatedJson<ResendRegistrationEmailRequest>,
+    path: ValidatedPath<RegIdPath>,
     auth: Auth,
 ) -> ApiResult<()> {
-    auth.try_permission("user", "resend-registration-email")?;
+    auth.try_permission("registration", "resend")?;
     app_data.query.user
         .resend_registration_email(
             &*app_data.db.read().await, app_data.clone(),
             &app_data.config.smtp.sender, &app_data.config.site,
-            &request.id[..])
+            &path.reg_id[..])
         .await
         .map_err(|err| match err {
             QueryError::UserRegistrationNotFound => ApiError::UserRegistration { reason: "NotFound".into() },
@@ -566,6 +623,98 @@ async fn resend_registration_email(
     respond(())
 }
 
+#[derive(Debug, Validate, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateUserRequest {
+    #[validate]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<Username>,
+    #[validate]
+    #[serde(deserialize_with = "double_option")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<Option<Email>>,
+    #[validate]
+    #[serde(deserialize_with = "double_option")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nickname: Option<Option<Nickname>>,
+    #[serde(deserialize_with = "double_option")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked: Option<Option<bool>>,
+}
+
+#[derive(Debug, Validate, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateSelfRequest {
+    #[validate]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<Username>,
+    #[validate]
+    #[serde(deserialize_with = "double_option")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nickname: Option<Option<Nickname>>,
+}
+
+async fn update_user_impl(
+    app_data: web::Data<AppState>,
+    auth: Auth,
+    uid: i32,
+    username: Option<Username>,
+    email: Option<Option<Email>>,
+    nickname: Option<Option<Nickname>>,
+    blocked: Option<Option<bool>>,
+) -> ApiResult<()> {
+    let username = username.map(|x| x.into());
+    let email = email.map(|x| x.map(|x| x.into()));
+    let nickname = nickname.map(|x| x.map(|x| x.into()));
+    let updated_at = app_data.query.user
+        .update_user(&mut *app_data.db.write().await, uid, &username,
+                     &email, &nickname, &blocked)
+        .await
+        .map_err(|err| match err {
+            QueryError::UserNotFound => ApiError::UserNotFound,
+            QueryError::DuplicatedUser { field } => ApiError::DuplicatedUser { field },
+            e => internal_server_error!(e),
+        })?;
+    app_data.send(UserUpdated {
+        id: uid,
+        username,
+        email,
+        password: None,
+        nickname,
+        avatar: None,
+        avatar128: None,
+        blocked,
+        updated_at: Some(updated_at),
+    }, &auth)
+        .await
+        .map_err(|e| internal_server_error!(e))?;
+    respond(())
+}
+
+async fn update_user_for_me(
+    app_data: web::Data<AppState>,
+    request: ValidatedJson<UpdateSelfRequest>,
+    auth: Auth,
+) -> ApiResult<()> {
+    auth.try_permission("user", "update-self")?;
+    let uid = auth.claims.as_ref().ok_or_else(|| ApiError::MissingAuthorizationHeader)?.uid;
+    update_user_impl(app_data, auth, uid, request.username.clone(), None,
+                     request.nickname.clone(), None).await
+}
+
+async fn update_user(
+    app_data: web::Data<AppState>,
+    uid_path: ValidatedPath<UidPath>,
+    request: ValidatedJson<UpdateUserRequest>,
+    auth: Auth,
+) -> ApiResult<()> {
+    auth.try_permission("user", "update")?;
+    let uid = uid_path.uid.clone().into();
+    update_user_impl(app_data, auth, uid, request.username.clone(), request.email.clone(),
+                     request.nickname.clone(), request.blocked.clone()).await
+}
+
+
 pub fn users_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::ServiceConfig)> {
     if let Err(e) = std::fs::create_dir_all(Path::new(&state.config.media.root)
         .join(crate::constants::AVATAR_FOLDER))  {
@@ -574,13 +723,17 @@ pub fn users_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::Servic
     let state = state.clone();
     Box::new(move |cfg| {
         cfg.service(
+            web::scope("registrations")
+                .app_data(state.clone())
+                .app_data(default_json_config())
+                .route("/{reg_id}/confirm", web::post().to(confirm_registration))
+                .route("/{reg_id}/resend", web::post().to(resend_registration_email))
+                .route("/{reg_id}", web::get().to(query_registration))
+                .route("", web::post().to(register_user))
+        ).service(
             web::scope("users")
                 .app_data(state.clone())
                 .app_data(default_json_config())
-                .route("/register", web::post().to(register_user))
-                .route("/confirm-registration", web::post().to(confirm_registration))
-                .route("/query-registration", web::get().to(query_registration))
-                .route("/resend-registration-email", web::post().to(resend_registration_email))
                 .route("/check-username-existence", web::get().to(check_username_existence))
                 .route("/check-email-existence", web::get().to(check_email_existence))
                 // .route("/me/password", web::post().to(index))
@@ -590,10 +743,10 @@ pub fn users_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::Servic
                         .app_data(default_path_config())
                         .app_data(avatar_multer_config())
                         .route("", web::post().to(upload_avatar_for_me))
+                        .route("", web::delete().to(delete_avatar_for_me))
                 )
-                // .route("/me/roles", web::get().to(index))
                 .route("/me", web::get().to(read_user_for_me))
-                // .route("/me", web::patch().to(index))
+                .route("/me", web::patch().to(update_user_for_me))
                 // .route("/me", web::delete().to(index))
                 // .route("/{uid}/password", web::post().to(index))
                 .service(
@@ -602,10 +755,11 @@ pub fn users_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::Servic
                         .app_data(default_path_config())
                         .app_data(avatar_multer_config())
                         .route("", web::post().to(upload_avatar))
+                        .route("", web::delete().to(delete_avatar))
                 )
-                // .route("/{uid}/roles", web::get().to(index))
+                // .route("/{uid}/roles", web::post().to(index))
                 .route("/{uid}", web::get().to(read_user))
-                // .route("/{uid}", web::patch().to(index))
+                .route("/{uid}", web::patch().to(update_user))
                 // .route("/{uid}", web::delete().to(index))
                 .route("", web::post().to(create_user))
                 // .route("", web::get().to(index))
