@@ -86,6 +86,14 @@ pub const PREDEFINED_PERMISSIONS: &[PredefinedPermission] = &[
     PredefinedPermission("registration", "resend", "Resend User Registration E-mail", "Resend user registration email via POST /api/registrations/{reg_id}/resend"),
     PredefinedPermission("user-username", "check-existence", "Check Username Existence", "Check whether username is occupied via GET /api/users/check-username-existence"),
     PredefinedPermission("user-email", "check-existence", "Check E-mail Existence", "Check whether E-mail is occupied via POST /api/users/check-email-existence"),
+    // User email updating
+    PredefinedPermission("user-email-updating", "create-self", "Update Self Email", "Update self's email via POST /api/email-updating/"),
+    PredefinedPermission("user-email-updating", "read", "Read User Updating Email", "Query user's email updating via POST /api/email-updating/{update_id}"),
+    PredefinedPermission("user-email-updating", "read-self", "Read Self Updating Email", "Query self's email updating via POST /api/email-updating/{update_id}"),
+    PredefinedPermission("user-email-updating", "confirm", "Confirm User Updating Email", "Confirm user's email updating via POST /api/email-updating/{update_id}/confirm"),
+    PredefinedPermission("user-email-updating", "confirm-self", "Confirm Self Updating Email", "Confirm self's email updating via POST /api/email-updating/{update_id}/confirm"),
+    PredefinedPermission("user-email-updating", "resend", "Resend User Updating Email", "Resend user's email updating via POST /api/email-updating/{update_id}/resend"),
+    PredefinedPermission("user-email-updating", "resend-self", "Resend Self Updating Email", "Resend self's email updating via POST /api/email-updating/{update_id}/resend"),
 ];
 
 pub const PREDEFINED_ROLES: &[PredefinedRole] = &[
@@ -117,6 +125,9 @@ pub const PREDEFINED_ROLES: &[PredefinedRole] = &[
         ("user-created", "subscribe"),
         ("user-updated", "subscribe"),
         ("user-deleted", "subscribe"),
+        ("user-email-updating", "read"),
+        ("user-email-updating", "confirm"),
+        ("user-email-updating", "resend"),
     ], "Administrator for Users", "Manage users", false),
     PredefinedRole("normal-user", &[
         ("user", "read-self"),
@@ -134,6 +145,10 @@ pub const PREDEFINED_ROLES: &[PredefinedRole] = &[
         ("user-deleted-self", "subscribe"),
         ("token-acquired-self", "subscribe"),
         ("token-revoked-self", "subscribe"),
+        ("user-email-updating", "create-self"),
+        ("user-email-updating", "read-self"),
+        ("user-email-updating", "confirm-self"),
+        ("user-email-updating", "resend-self"),
     ], "Normal User", "Manage users's own information", true),
     PredefinedRole("default", &[
         ("registration", "create"),

@@ -77,6 +77,10 @@ pub enum ApiError {
     UserRegistration {
         reason: String,
     },
+    #[error(display = "user email updating {}", reason)]
+    UserEmailUpdating {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -196,7 +200,8 @@ impl From<ApiError> for ApiErrorWrapper {
             | ApiError::ValidationError { .. }
             | ApiError::MissingAuthorizationHeader
             | ApiError::AvatarError{ .. }
-            | ApiError::UserRegistration { .. } => 400,
+            | ApiError::UserRegistration { .. }
+            | ApiError:: UserEmailUpdating { .. } => 400,
             ApiError::DuplicatedUser { .. } => 409,
             ApiError::UserNotFound => 404,
         };
@@ -228,7 +233,8 @@ impl ResponseError for ApiError {
             | ApiError::ValidationError { .. }
             | ApiError::MissingAuthorizationHeader
             | ApiError::AvatarError { .. }
-            | ApiError::UserRegistration { .. } =>
+            | ApiError::UserRegistration { .. }
+            | ApiError::UserEmailUpdating { .. } =>
                 HttpResponse::BadRequest().json(ApiErrorWrapper::from(self.clone())),
             ApiError::DuplicatedUser { .. } =>
                 HttpResponse::Conflict().json(ApiErrorWrapper::from(self.clone())),

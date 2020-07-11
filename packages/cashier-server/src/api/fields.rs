@@ -52,14 +52,14 @@ pub struct Nickname {
 
 #[derive(Debug, Validate, Serialize, Deserialize, Deref, AsRef, From, Into, Clone)]
 #[serde(transparent)]
-pub struct RegistrationId {
+pub struct Any24 {
     #[validate(length(equal = 24, message = "should have 24 chars"))]
     inner: String,
 }
 
 #[derive(Debug, Validate, Serialize, Deserialize, Deref, AsRef, From, Into, Clone)]
 #[serde(transparent)]
-pub struct RegistrationCode {
+pub struct Any6 {
     #[validate(length(equal = 6, message = "should have 6 chars"))]
     inner: String,
 }

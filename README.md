@@ -89,6 +89,18 @@ All fields are required.
 |expires_at|Date|last time to update the user|
 |completed|Boolean|`null` for not completed, `false` for rejected, `true` for completed|
 
+### 1.7 User Email Updating
+
+|Key|Type|Description|
+|---|---|---|
+|id|String|24-byte randomly generated token|
+|code|String|6-byte randomly generated digital code|
+|user|Integer|the id of the user|
+|new_email|String|the new email of the user|
+|created_at|Date|the time to create the user|
+|expires_at|Date|last time to update the user|
+|completed|Boolean|`null` for not completed, `false` for rejected, `true` for completed|
+
 ## 2 TODO
 
 - [x] Multipart

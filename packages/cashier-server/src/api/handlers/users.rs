@@ -21,8 +21,8 @@ use crate::{
             PopulateUser,
             PopulateRole,
             PopulatePermission,
-            RegistrationId,
-            RegistrationCode,
+            Any24,
+            Any6,
         },
     },
     queries::{
@@ -56,6 +56,7 @@ use std::{
 };
 use validator::Validate;
 use validator_derive::Validate;
+use crate::queries::users::UserEmailUpdatingPublic;
 
 #[derive(Debug, Validate, Deserialize)]
 struct CreateUserRequest {
@@ -247,7 +248,7 @@ async fn upload_avatar_impl(
         avatar: Some(Some(avatar.clone())),
         avatar128: Some(avatar128.clone()),
         blocked: None,
-        updated_at: Some(updated_at),
+        updated_at,
     }, &auth)
         .await
         .map_err(|e| internal_server_error!(e))?;
@@ -316,7 +317,7 @@ async fn delete_avatar_impl(
         avatar: Some(None),
         avatar128: Some(None),
         blocked: None,
-        updated_at: Some(updated_at),
+        updated_at,
     }, &auth)
         .await
         .map_err(|e| internal_server_error!(e))?;
@@ -495,13 +496,13 @@ async fn register_user(
 #[derive(Debug, Validate, Deserialize)]
 struct RegIdPath {
     #[validate]
-    reg_id: RegistrationId,
+    reg_id: Any24,
 }
 
 #[derive(Debug, Validate, Deserialize)]
 struct ConfirmRegistrationRequest {
     #[validate]
-    code: RegistrationCode,
+    code: Any6,
 }
 
 async fn confirm_registration(
@@ -511,7 +512,7 @@ async fn confirm_registration(
     auth: Auth,
 ) -> ApiResult<()> {
     auth.try_permission("registration", "confirm")?;
-    app_data.query.user
+    let result = app_data.query.user
         .confirm_registration(&mut *app_data.db.write().await,
                               &path.reg_id[..], &request.code[..])
         .await
@@ -522,6 +523,15 @@ async fn confirm_registration(
             QueryError::DuplicatedUser { field } => ApiError::DuplicatedUser { field },
             e => internal_server_error!(e),
         })?;
+    app_data.send(UserCreated {
+        id: result.id,
+        username: result.username,
+        roles: result.roles,
+        email: result.email,
+        created_at: result.created_at,
+    }, &auth)
+        .await
+        .map_err(|e| internal_server_error!(e))?;
     respond(())
 }
 
@@ -684,7 +694,7 @@ async fn update_user_impl(
         avatar: None,
         avatar128: None,
         blocked,
-        updated_at: Some(updated_at),
+        updated_at,
     }, &auth)
         .await
         .map_err(|e| internal_server_error!(e))?;
@@ -714,6 +724,154 @@ async fn update_user(
                      request.nickname.clone(), request.blocked.clone()).await
 }
 
+#[derive(Debug, Validate, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateEmailRequest {
+    #[validate]
+    pub email: Email,
+}
+
+#[derive(Debug, Serialize)]
+struct UpdateEmailResponse {
+    id: String,
+    created_at: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+}
+
+async fn update_user_email(
+    app_data: web::Data<AppState>,
+    request: ValidatedJson<UpdateEmailRequest>,
+    auth: Auth,
+) -> ApiResult<UpdateEmailResponse> {
+    auth.try_permission("user-email-updating", "create-self")?;
+    let uid = auth.claims.as_ref().ok_or_else(|| ApiError::MissingAuthorizationHeader)?.uid;
+    let result = app_data.query.user
+        .update_email(
+            &*app_data.db.read().await, app_data.clone(),
+            &app_data.config.smtp.sender, &app_data.config.site,
+            uid, &request.email[..],
+        )
+        .await
+        .map_err(|err| match err {
+            QueryError::UserNotFound => ApiError::UserNotFound,
+            QueryError::DuplicatedUser { field } => ApiError::DuplicatedUser { field },
+            e => internal_server_error!(e),
+        })?;
+    respond(UpdateEmailResponse {
+        id: result.id,
+        created_at: result.created_at,
+        expires_at: result.expires_at,
+    })
+}
+
+#[derive(Debug, Validate, Deserialize)]
+struct UpdateIdPath {
+    #[validate]
+    update_id: Any24,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "status")]
+enum QueryEmailUpdatingResponse {
+    NotFound,
+    Expired,
+    Processing(UserEmailUpdatingPublic),
+    Passed(UserEmailUpdatingPublic),
+    Rejected(UserEmailUpdatingPublic),
+}
+
+async fn query_email_updating(
+    app_data: web::Data<AppState>,
+    path: ValidatedPath<UpdateIdPath>,
+    auth: Auth,
+) -> ApiResult<QueryEmailUpdatingResponse> {
+    let result = match app_data.query.user
+        .query_email_updating(&*app_data.db.read().await, &auth, &path.update_id[..])
+        .await {
+        Ok(value) => {
+            match value.completed {
+                Some(true) => QueryEmailUpdatingResponse::Passed(value),
+                Some(false) => QueryEmailUpdatingResponse::Rejected(value),
+                None => QueryEmailUpdatingResponse::Processing(value),
+            }
+        },
+        Err(QueryError::PermissionDenied { subject, action }) => return Err(ApiError::PermissionDenied {
+            subject,
+            action,
+        }),
+        Err(QueryError::UserEmailUpdatingExpired) => QueryEmailUpdatingResponse::Expired,
+        Err(QueryError::UserEmailUpdatingNotFound) => QueryEmailUpdatingResponse::NotFound,
+        Err(e) => return Err(internal_server_error!(e)),
+    };
+    respond(result)
+}
+
+#[derive(Debug, Validate, Deserialize)]
+struct ConfirmEmailUpdatingRequest {
+    #[validate]
+    code: Any6,
+}
+
+async fn confirm_email_updating(
+    app_data: web::Data<AppState>,
+    request: ValidatedJson<ConfirmEmailUpdatingRequest>,
+    path: ValidatedPath<UpdateIdPath>,
+    auth: Auth,
+) -> ApiResult<()> {
+    let result = app_data.query.user
+        .confirm_email_updating(&mut *app_data.db.write().await, &auth,
+                                &path.update_id[..], &request.code[..])
+        .await
+        .map_err(|err| match err {
+            QueryError::UserEmailUpdatingNotFound => ApiError::UserEmailUpdating { reason: "NotFound".into() },
+            QueryError::UserEmailUpdatingExpired => ApiError::UserEmailUpdating { reason: "Expired".into() },
+            QueryError::UserEmailUpdatingWrongCode => ApiError::UserEmailUpdating { reason: "WrongCode".into() },
+            QueryError::DuplicatedUser { field } => ApiError::DuplicatedUser { field },
+            QueryError::UserNotFound => ApiError::UserNotFound,
+            QueryError::PermissionDenied { subject, action } => ApiError::PermissionDenied {
+                subject,
+                action,
+            },
+            e => internal_server_error!(e),
+        })?;
+    app_data.send(UserUpdated {
+        id: result.id,
+        username: None,
+        email: Some(Some(result.email)),
+        password: None,
+        nickname: None,
+        avatar: None,
+        avatar128: None,
+        blocked: None,
+        updated_at: result.updated_at,
+    }, &auth)
+        .await
+        .map_err(|e| internal_server_error!(e))?;
+    respond(())
+}
+
+async fn resend_email_updating_email(
+    app_data: web::Data<AppState>,
+    path: ValidatedPath<UpdateIdPath>,
+    auth: Auth,
+) -> ApiResult<()> {
+    app_data.query.user
+        .resend_email_updating_email(
+            &*app_data.db.read().await, app_data.clone(), &auth,
+            &app_data.config.smtp.sender, &app_data.config.site,
+            &path.update_id[..])
+        .await
+        .map_err(|err| match err {
+            QueryError::UserEmailUpdatingNotFound => ApiError::UserEmailUpdating { reason: "NotFound".into() },
+            QueryError::UserEmailUpdatingExpired => ApiError::UserEmailUpdating { reason: "Expired".into() },
+            QueryError::PermissionDenied { subject, action } => ApiError::PermissionDenied {
+                subject,
+                action,
+            },
+            e => internal_server_error!(e),
+        })?;
+    respond(())
+}
 
 pub fn users_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::ServiceConfig)> {
     if let Err(e) = std::fs::create_dir_all(Path::new(&state.config.media.root)
@@ -730,6 +888,14 @@ pub fn users_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::Servic
                 .route("/{reg_id}/resend", web::post().to(resend_registration_email))
                 .route("/{reg_id}", web::get().to(query_registration))
                 .route("", web::post().to(register_user))
+        ).service(
+            web::scope("email-updating")
+                .app_data(state.clone())
+                .app_data(default_json_config())
+                .route("/{update_id}/confirm", web::post().to(confirm_email_updating))
+                .route("/{update_id}/resend", web::post().to(resend_email_updating_email))
+                .route("/{update_id}", web::get().to(query_email_updating))
+                .route("", web::post().to(update_user_email))
         ).service(
             web::scope("users")
                 .app_data(state.clone())

@@ -337,6 +337,29 @@ pub async fn init_user_registration(client: &Client) -> Result<()> {
     Ok(())
 }
 
+pub async fn drop_user_email_updating(client: &Client) -> Result<()> {
+    client
+        .query("DROP TABLE IF EXISTS user_email_updating", &[])
+        .await?;
+    Ok(())
+}
+
+pub async fn init_user_email_updating(client: &Client) -> Result<()> {
+    client
+        .query("\
+            CREATE TABLE IF NOT EXISTS user_email_updating(\
+                id CHAR(24) PRIMARY KEY,\
+                code CHAR(6) NOT NULL,\
+                \"user\" INTEGER REFERENCES \"user\"(id) ON DELETE CASCADE NOT NULL,\
+                new_email TEXT NOT NULL,\
+                created_at TIMESTAMP WITH TIME ZONE NOT NULL,\
+                expires_at TIMESTAMP WITH TIME ZONE NOT NULL,\
+                completed BOOL\
+            )", &[])
+        .await?;
+    Ok(())
+}
+
 pub async fn init(config: &InitConfig) -> Result<()> {
     let (client, connection) = tokio_postgres::connect(&config.db, NoTls).await?;
     tokio::spawn(async move {
@@ -346,6 +369,7 @@ pub async fn init(config: &InitConfig) -> Result<()> {
     });
     if config.reset {
         // in reverse order
+        drop_user_email_updating(&client).await?;
         drop_user_registration(&client).await?;
         drop_global_settings(&client).await?;
         drop_token(&client).await?;
@@ -360,5 +384,6 @@ pub async fn init(config: &InitConfig) -> Result<()> {
     init_token(&client).await?;
     init_global_settings(&client).await?;
     init_user_registration(&client).await?;
+    init_user_email_updating(&client).await?;
     Ok(())
 }

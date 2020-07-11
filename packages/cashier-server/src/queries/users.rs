@@ -1,5 +1,5 @@
 use super::errors::{Error, Result};
-use super::email::register_user_email;
+use super::email::{register_user_email, update_user_email};
 use actix_web::web::{self, block};
 use chrono::{DateTime, Utc};
 use derive_more::From;
@@ -14,6 +14,7 @@ use tokio_postgres::{
     IsolationLevel, Row,
 };
 use crate::api::app_state::AppState;
+use crate::api::extractors::auth::Auth;
 use crate::queries::errors::Error::DuplicatedUser;
 
 struct Digit;
@@ -41,6 +42,22 @@ pub struct UserIdPasswordBlocked {
 pub struct UserIdCreatedAt {
     pub id: i32,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug)]
+pub struct UserCreatedByRegistration {
+    pub id: i32,
+    pub username: String,
+    pub roles: Vec<String>,
+    pub email: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug)]
+pub struct UserIdEmailUpdatedAt {
+    pub id: i32,
+    pub email: String,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
@@ -444,6 +461,37 @@ impl From<&Row> for UserRegistrationPublic {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+pub struct UserEmailUpdating {
+    pub id: String,
+    pub code: String,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct UserEmailUpdatingPublic {
+    pub id: String,
+    pub user: i32,
+    pub new_email: String,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub completed: Option<bool>,
+}
+
+impl From<&Row> for UserEmailUpdatingPublic {
+    fn from(row: &Row) -> Self {
+        Self {
+            id: row.get("id"),
+            user: row.get("user"),
+            new_email: row.get("new_email"),
+            created_at: row.get("created_at"),
+            expires_at: row.get("expires_at"),
+            completed: row.get("completed"),
+        }
+    }
+}
+
 pub struct Query {
     find_one_from_username_to_id_password_blocked: Statement,
     find_one_from_email_to_id_password_blocked: Statement,
@@ -461,6 +509,7 @@ pub struct Query {
     update_avatars: Statement,
     find_one: Statement,
     find_one_public: Statement,
+    find_one_to_username: Statement,
     find_roles_only_id: Statement,
     find_roles_short: Statement,
     find_roles_without_permissions: Statement,
@@ -473,10 +522,16 @@ pub struct Query {
     find_one_from_user_registration: Statement,
     find_one_from_user_registration_without_password: Statement,
     insert_one_registered_user: Statement,
-    insert_one_default_roles: Statement,
+    find_default_roles: Statement,
     complete_registration: Statement,
     query_registration: Statement,
     update_user: Statement,
+    insert_one_into_user_email_updating: Statement,
+    find_one_from_user_email_updating: Statement,
+    find_one_from_user_email_updating_join_user: Statement,
+    update_email: Statement,
+    complete_email_updating: Statement,
+    query_email_updating: Statement,
 }
 
 impl Query {
@@ -574,6 +629,11 @@ impl Query {
                 WHERE id = $1 AND NOT deleted LIMIT 1",
             &[Type::INT4],
         ).await.unwrap();
+        let find_one_to_username = client.prepare_typed(
+            "SELECT username FROM \"user\" \
+                WHERE id = $1 AND NOT deleted LIMIT 1",
+            &[Type::INT4],
+        ).await.unwrap();
         let find_roles_only_id = client.prepare_typed(
             "SELECT DISTINCT \"user_id\", id \
                     FROM (SELECT UNNEST($1) AS user_id) AS temp, user_role, role \
@@ -656,11 +716,9 @@ impl Query {
                 RETURNING id, created_at",
             &[Type::TEXT, Type::TEXT, Type::TEXT],
         ).await.unwrap();
-        let insert_one_default_roles = client.prepare_typed(
-            "INSERT INTO user_role (\"user\", role) \
-                SELECT $1, id FROM role \
-                WHERE \"default\" = TRUE AND NOT deleted",
-            &[Type::INT4],
+        let find_default_roles = client.prepare(
+            "SELECT name FROM role \
+            WHERE \"default\" = TRUE AND NOT deleted",
         ).await.unwrap();
         let complete_registration = client.prepare_typed(
             "UPDATE user_registration SET completed = TRUE \
@@ -684,6 +742,42 @@ impl Query {
             &[Type::BOOL, Type::TEXT, Type::BOOL, Type::TEXT,
                 Type::BOOL, Type::TEXT, Type::BOOL, Type::BOOL, Type::INT4]
         ).await.unwrap();
+        let insert_one_into_user_email_updating = client.prepare_typed(
+            &format!("INSERT INTO user_email_updating (id, code, \"user\", new_email, \
+                                                       created_at, expires_at) \
+                VALUES ($1, $2, $3, $4, NOW(), NOW() + INTERVAL '{}') \
+                RETURNING created_at, expires_at", crate::constants::USER_UPDATING_EMAIL_EXPIRE),
+            &[Type::TEXT, Type::TEXT, Type::INT4, Type::TEXT]
+        ).await.unwrap();
+        let find_one_from_user_email_updating = client.prepare_typed(
+            "SELECT code, \"user\", new_email, expires_at FROM user_email_updating \
+            WHERE id = $1 AND completed IS NULL LIMIT 1",
+            &[Type::TEXT]
+        ).await.unwrap();
+        let find_one_from_user_email_updating_join_user = client.prepare_typed(
+            "SELECT code, new_email, \"user\".id as uid, \"user\".username, expires_at \
+            FROM user_email_updating, \"user\" \
+            WHERE user_email_updating.id = $1 AND completed IS NULL AND \
+                user_email_updating.user = \"user\".id AND NOT \"user\".deleted \
+            LIMIT 1",
+            &[Type::TEXT],
+        ).await.unwrap();
+        let update_email = client.prepare_typed(
+            "UPDATE \"user\" SET email = $1, updated_at = NOW() \
+                WHERE id = $2 AND NOT deleted \
+                RETURNING updated_at",
+            &[Type::TEXT, Type::INT4]
+        ).await.unwrap();
+        let complete_email_updating = client.prepare_typed(
+            "UPDATE user_email_updating SET completed = TRUE \
+            WHERE id = $1 AND completed IS NULL",
+            &[Type::TEXT]
+        ).await.unwrap();
+        let query_email_updating = client.prepare_typed(
+            "SELECT id, \"user\", new_email, created_at, expires_at, completed \
+            FROM user_email_updating WHERE id = $1 LIMIT 1",
+            &[Type::TEXT]
+        ).await.unwrap();
         Self {
             find_one_from_username_to_id_password_blocked,
             find_one_from_email_to_id_password_blocked,
@@ -701,6 +795,7 @@ impl Query {
             update_avatars,
             find_one,
             find_one_public,
+            find_one_to_username,
             find_roles_only_id,
             find_roles_short,
             find_roles_without_permissions,
@@ -713,10 +808,16 @@ impl Query {
             find_one_from_user_registration,
             find_one_from_user_registration_without_password,
             insert_one_registered_user,
-            insert_one_default_roles,
+            find_default_roles,
             complete_registration,
             query_registration,
             update_user,
+            insert_one_into_user_email_updating,
+            find_one_from_user_email_updating,
+            find_one_from_user_email_updating_join_user,
+            update_email,
+            complete_email_updating,
+            query_email_updating
         }
     }
     pub async fn find_one_from_username_to_id_password_blocked(
@@ -1092,7 +1193,7 @@ impl Query {
     }
     pub async fn confirm_registration(
         &self, client: &mut Client, id: &str, code: &str,
-    ) -> Result<UserIdCreatedAt> {
+    ) -> Result<UserCreatedByRegistration> {
         let transaction = client.build_transaction()
             .isolation_level(IsolationLevel::RepeatableRead)
             .start()
@@ -1128,15 +1229,24 @@ impl Query {
             .query_one(&self.insert_one_registered_user, &[&username, &password, &email])
             .await?;
         let user_id: i32 = user.get("id");
+        let roles = transaction
+            .query(&self.find_default_roles, &[])
+            .await?
+            .iter()
+            .map(|x| x.get("name"))
+            .collect::<Vec<String>>();
         transaction
-            .query(&self.insert_one_default_roles, &[&user_id])
+            .query(&self.insert_one_roles, &[&user_id, &roles])
             .await?;
         transaction
             .query(&self.complete_registration, &[&id])
             .await?;
         transaction.commit().await?;
-        Ok(UserIdCreatedAt {
+        Ok(UserCreatedByRegistration {
             id: user_id,
+            username,
+            roles,
+            email: Some(email),
             created_at: user.get("created_at"),
         })
     }
@@ -1228,5 +1338,175 @@ impl Query {
         transaction.commit()
             .await?;
         Ok(row.get("updated_at"))
+    }
+    pub async fn update_email(
+        &self, client: &Client,
+        app_data: web::Data<AppState>, // for smtp
+        sender: &str, site: &str,
+        uid: i32, new_email: &str,
+    ) -> Result<UserEmailUpdating> {
+        let username: String = client
+            .query(&self.find_one_to_username, &[&uid])
+            .await?
+            .get(0)
+            .ok_or_else(|| Error::UserNotFound)?
+            .get("username");
+        let rows = client
+            .query(&self.find_one_from_email_to_id, &[&new_email])
+            .await?;
+        if !rows.is_empty() {
+            return Err(Error::DuplicatedUser { field: "email".into() });
+        }
+        let mut rng = thread_rng();
+        let id: String = iter::repeat(())
+            .map(|()| rng.sample(Alphanumeric))
+            .take(24)
+            .collect();
+        let code: String = iter::repeat(())
+            .map(|()| rng.sample(Digit))
+            .take(6)
+            .collect();
+        let message = update_user_email(sender.parse()?, new_email.parse()?,
+                                        site, &username, &id, &code)?;
+        block(move || app_data.smtp.send(&message))
+            .await?;
+        let row = client
+            .query_one(&self.insert_one_into_user_email_updating,
+                       &[&id, &code, &uid, &new_email])
+            .await?;
+        Ok(UserEmailUpdating {
+            id,
+            code,
+            created_at: row.get("created_at"),
+            expires_at: row.get("expires_at"),
+        })
+    }
+    pub async fn confirm_email_updating(
+        &self, client: &mut Client, auth: &Auth, id: &str, code: &str,
+    ) -> Result<UserIdEmailUpdatedAt> {
+        if !auth.has_permission("user-email-updating", "confirm-self") &&
+            !auth.has_permission("user-email-updating", "confirm") {
+            return Err(Error::PermissionDenied {
+                subject: "user-email-updating".into(),
+                action: "confirm".into(),
+            })
+        }
+        let transaction = client.build_transaction()
+            .isolation_level(IsolationLevel::RepeatableRead)
+            .start()
+            .await?;
+        let rows = transaction
+            .query(&self.find_one_from_user_email_updating, &[&id])
+            .await?;
+        let row = rows
+            .get(0)
+            .ok_or_else(|| Error::UserEmailUpdatingNotFound)?;
+        let real_code: String = row.get("code");
+        let user: i32 = row.get("user");
+        let new_email: String = row.get("new_email");
+        let expires_at: DateTime<Utc> = row.get("expires_at");
+        if (auth.claims.is_none() || auth.claims.as_ref().unwrap().uid != user) &&
+            !auth.has_permission("user-email-updating", "confirm") {
+            return Err(Error::PermissionDenied {
+                subject: "user-email-updating".into(),
+                action: "confirm".into(),
+            })
+        }
+        if expires_at < Utc::now() {
+            return Err(Error::UserEmailUpdatingExpired);
+        }
+        if real_code != code {
+            return Err(Error::UserEmailUpdatingWrongCode);
+        }
+        let rows = transaction
+            .query(&self.find_one_from_email_to_id, &[&new_email])
+            .await?;
+        if !rows.is_empty() {
+            return Err(Error::DuplicatedUser { field: "email".into() });
+        }
+        let rows = transaction
+            .query(&self.update_email, &[&new_email, &user])
+            .await?;
+        let row = rows
+            .get(0)
+            .ok_or_else(|| Error::UserNotFound)?;
+        transaction
+            .query(&self.complete_email_updating, &[&id])
+            .await?;
+        transaction.commit().await?;
+        Ok(UserIdEmailUpdatedAt {
+            id: user,
+            email: new_email,
+            updated_at: row.get("updated_at"),
+        })
+    }
+    pub async fn query_email_updating(
+        &self, client: &Client, auth: &Auth, id: &str,
+    ) -> Result<UserEmailUpdatingPublic> {
+        if !auth.has_permission("user-email-updating", "read-self") &&
+            !auth.has_permission("user-email-updating", "read") {
+            return Err(Error::PermissionDenied {
+                subject: "user-email-updating".into(),
+                action: "read".into(),
+            })
+        }
+        let rows = client
+            .query(&self.query_email_updating, &[&id])
+            .await?;
+        let row = rows
+            .get(0)
+            .ok_or_else(|| Error::UserEmailUpdatingNotFound)?;
+        let registration = UserEmailUpdatingPublic::from(row);
+        if (auth.claims.is_none() || auth.claims.as_ref().unwrap().uid != registration.user) &&
+            !auth.has_permission("user-email-updating", "read") {
+            return Err(Error::PermissionDenied {
+                subject: "user-email-updating".into(),
+                action: "read".into(),
+            })
+        }
+        if registration.completed.is_none() && registration.expires_at < Utc::now() {
+            return Err(Error::UserEmailUpdatingExpired);
+        }
+        Ok(registration)
+    }
+    pub async fn resend_email_updating_email(
+        &self, client: &Client,
+        app_data: web::Data<AppState>,
+        auth: &Auth,
+        sender: &str, site: &str, id: &str,
+    ) -> Result<()> {
+        if !auth.has_permission("user-email-updating", "resend-self") &&
+            !auth.has_permission("user-email-updating", "resend") {
+            return Err(Error::PermissionDenied {
+                subject: "user-email-updating".into(),
+                action: "resend".into(),
+            })
+        }
+        let rows = client
+            .query(&self.find_one_from_user_email_updating_join_user, &[&id])
+            .await?;
+        let row = rows
+            .get(0)
+            .ok_or_else(|| Error::UserEmailUpdatingNotFound)?;
+        let code: String = row.get("code");
+        let uid: i32 = row.get("uid");
+        let username: String = row.get("username");
+        let email: String = row.get("new_email");
+        let expires_at: DateTime<Utc> = row.get("expires_at");
+        if (auth.claims.is_none() || auth.claims.as_ref().unwrap().uid != uid) &&
+            !auth.has_permission("user-email-updating", "resend") {
+            return Err(Error::PermissionDenied {
+                subject: "user-email-updating".into(),
+                action: "resend".into(),
+            })
+        }
+        if expires_at < Utc::now() {
+            return Err(Error::UserEmailUpdatingExpired);
+        }
+        let message = update_user_email(sender.parse()?, email.parse()?,
+                                        site, &username, &id, &code)?;
+        block(move || app_data.smtp.send(&message))
+            .await?;
+        Ok(())
     }
 }

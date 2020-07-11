@@ -11,6 +11,7 @@ pub const AVATAR_FILENAME_LENGTH: usize = 24;
 pub const CHANNEL_NAME: &str = "cashier-server-channel";
 
 pub const USER_REGISTRATION_EXPIRE: &str = "30 minutes";
+pub const USER_UPDATING_EMAIL_EXPIRE: &str = "30 minutes";
 
 lazy_static! {
     pub static ref WEBSOCKET_HEARTBEAT_INTERVAL: Duration = Duration::seconds(30);

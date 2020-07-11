@@ -43,6 +43,17 @@ pub enum Error {
     UserRegistrationExpired,
     #[error(display = "user registration wrong code")]
     UserRegistrationWrongCode,
+    #[error(display = "user email updating not found")]
+    UserEmailUpdatingNotFound,
+    #[error(display = "user email updating expired")]
+    UserEmailUpdatingExpired,
+    #[error(display = "user registration wrong code")]
+    UserEmailUpdatingWrongCode,
+    #[error(display = "permission denied, requires {} {} permission", action, subject)]
+    PermissionDenied {
+        subject: String,
+        action: String,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

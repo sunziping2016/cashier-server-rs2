@@ -77,8 +77,7 @@ pub struct UserUpdated {
     #[serde(deserialize_with = "double_option")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocked: Option<Option<bool>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub updated_at: Option<DateTime<Utc>>,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
