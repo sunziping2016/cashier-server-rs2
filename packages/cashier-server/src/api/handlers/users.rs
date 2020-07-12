@@ -32,7 +32,7 @@ use crate::{
             User, Role, Permission, UserRegistrationPublic,
         },
     },
-    websocket::push_messages::{UserCreated, UserUpdated, double_option},
+    websocket::push_messages::{UserCreated, UserUpdated, TokenRevoked, double_option},
     internal_server_error,
 };
 use actix_web::{
@@ -807,6 +807,7 @@ async fn query_email_updating(
 }
 
 #[derive(Debug, Validate, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ConfirmEmailUpdatingRequest {
     #[validate]
     code: Any6,
@@ -873,6 +874,92 @@ async fn resend_email_updating_email(
     respond(())
 }
 
+async fn update_password_impl(
+    app_data: web::Data<AppState>,
+    auth: Auth,
+    uid: i32,
+    password: String,
+    old_password: Option<String>,
+) -> ApiResult<()> {
+    let updated_at = app_data.query.user
+        .update_password(&mut *app_data.db.write().await, uid,
+                         password, old_password)
+        .await
+        .map_err(|err| match err {
+            QueryError::UserNotFound => ApiError::UserNotFound,
+            QueryError::WrongPassword => ApiError::WrongUserOrPassword,
+            e => internal_server_error!(e),
+        })?;
+    app_data.send(UserUpdated {
+        id: uid,
+        username: None,
+        email: None,
+        password: Some(()),
+        nickname: None,
+        avatar: None,
+        avatar128: None,
+        blocked: None,
+        updated_at,
+    }, &auth)
+        .await
+        .map_err(|e| internal_server_error!(e))?;
+    let results = app_data.query.token
+        .revoke_tokens_from_user(&*app_data.db.read().await, uid)
+        .await
+        .map_err(|e| internal_server_error!(e))?;
+    app_data.send_all(
+        results.into_iter()
+            .map(|result| TokenRevoked {
+                jti: result.id,
+                uid: result.user,
+            }.into())
+            .collect(),
+        &auth
+    )
+        .await
+        .map_err(|e| internal_server_error!(e))?;
+    respond(())
+}
+
+#[derive(Debug, Validate, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdatePasswordForMeRequest {
+    #[validate]
+    password: Password,
+    #[validate]
+    old_password: Password
+}
+
+async fn update_password_for_me(
+    app_data: web::Data<AppState>,
+    request: ValidatedJson<UpdatePasswordForMeRequest>,
+    auth: Auth,
+) -> ApiResult<()> {
+    auth.try_permission("user-password", "update-self")?;
+    let uid = auth.claims.as_ref().ok_or_else(|| ApiError::MissingAuthorizationHeader)?.uid;
+    update_password_impl(app_data, auth, uid,
+                         request.password.clone().into(),
+                         Some(request.old_password.clone().into())).await
+}
+
+#[derive(Debug, Validate, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdatePasswordRequest {
+    #[validate]
+    password: Password,
+}
+
+async fn update_password(
+    app_data: web::Data<AppState>,
+    uid_path: ValidatedPath<UidPath>,
+    request: ValidatedJson<UpdatePasswordRequest>,
+    auth: Auth,
+) -> ApiResult<()> {
+    auth.try_permission("user-password", "update")?;
+    let uid = uid_path.uid.clone().into();
+    update_password_impl(app_data, auth, uid, request.password.clone().into(), None).await
+}
+
 pub fn users_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::ServiceConfig)> {
     if let Err(e) = std::fs::create_dir_all(Path::new(&state.config.media.root)
         .join(crate::constants::AVATAR_FOLDER))  {
@@ -902,7 +989,6 @@ pub fn users_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::Servic
                 .app_data(default_json_config())
                 .route("/check-username-existence", web::get().to(check_username_existence))
                 .route("/check-email-existence", web::get().to(check_email_existence))
-                // .route("/me/password", web::post().to(index))
                 .service(
                     web::scope("/me/avatar")
                         .app_data(state.clone())
@@ -911,10 +997,10 @@ pub fn users_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::Servic
                         .route("", web::post().to(upload_avatar_for_me))
                         .route("", web::delete().to(delete_avatar_for_me))
                 )
+                .route("/me/password", web::post().to(update_password_for_me))
                 .route("/me", web::get().to(read_user_for_me))
                 .route("/me", web::patch().to(update_user_for_me))
                 // .route("/me", web::delete().to(index))
-                // .route("/{uid}/password", web::post().to(index))
                 .service(
                     web::scope("/{uid}/avatar")
                         .app_data(state)
@@ -923,6 +1009,7 @@ pub fn users_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::Servic
                         .route("", web::post().to(upload_avatar))
                         .route("", web::delete().to(delete_avatar))
                 )
+                .route("/{uid}/password", web::post().to(update_password))
                 // .route("/{uid}/roles", web::post().to(index))
                 .route("/{uid}", web::get().to(read_user))
                 .route("/{uid}", web::patch().to(update_user))

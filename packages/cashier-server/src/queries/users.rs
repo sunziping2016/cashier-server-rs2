@@ -532,6 +532,8 @@ pub struct Query {
     update_email: Statement,
     complete_email_updating: Statement,
     query_email_updating: Statement,
+    find_one_to_password: Statement,
+    update_password: Statement,
 }
 
 impl Query {
@@ -778,6 +780,17 @@ impl Query {
             FROM user_email_updating WHERE id = $1 LIMIT 1",
             &[Type::TEXT]
         ).await.unwrap();
+        let find_one_to_password = client.prepare_typed(
+            "SELECT password FROM \"user\" \
+                WHERE id = $1 AND NOT deleted LIMIT 1",
+            &[Type::INT4]
+        ).await.unwrap();
+        let update_password = client.prepare_typed(
+            "UPDATE \"user\" SET password = $1 \
+                WHERE id = $2 AND NOT DELETED \
+                RETURNING updated_at",
+            &[Type::TEXT, Type::INT4]
+        ).await.unwrap();
         Self {
             find_one_from_username_to_id_password_blocked,
             find_one_from_email_to_id_password_blocked,
@@ -817,7 +830,9 @@ impl Query {
             find_one_from_user_email_updating_join_user,
             update_email,
             complete_email_updating,
-            query_email_updating
+            query_email_updating,
+            find_one_to_password,
+            update_password,
         }
     }
     pub async fn find_one_from_username_to_id_password_blocked(
@@ -1508,5 +1523,36 @@ impl Query {
         block(move || app_data.smtp.send(&message))
             .await?;
         Ok(())
+    }
+    pub async fn update_password(
+        &self, client: &mut Client, id: i32, password: String, old_password: Option<String>
+    ) -> Result<DateTime<Utc>> {
+        let transaction = client.build_transaction()
+            .isolation_level(IsolationLevel::RepeatableRead)
+            .start()
+            .await?;
+        if let Some(old_password) = old_password {
+            let old_password_hash: String = transaction
+                .query(&self.find_one_to_password, &[&id])
+                .await?
+                .get(0)
+                .ok_or_else(|| Error::UserNotFound)?
+                .get("password");
+            let verified = block(move || bcrypt::verify(old_password, &old_password_hash))
+                .await?;
+            if !verified {
+                return Err(Error::WrongPassword);
+            }
+        }
+        let password_hash = block(move || bcrypt::hash(password, crate::constants::BCRYPT_COST))
+            .await?;
+        let updated_at = transaction
+            .query(&self.update_password, &[&password_hash, &id])
+            .await?
+            .get(0)
+            .ok_or_else(|| Error::UserNotFound)?
+            .get("updated_at");
+        transaction.commit().await?;
+        Ok(updated_at)
     }
 }
