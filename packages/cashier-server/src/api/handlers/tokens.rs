@@ -11,6 +11,7 @@ use crate::{
             Password,
             Email,
         },
+        fields::{Id}
     },
     queries::{
         tokens::Token,
@@ -24,7 +25,7 @@ use actix_web::{
     web,
     http::HeaderValue,
 };
-use actix_web_validator::ValidatedJson;
+use actix_web_validator::{ValidatedJson, ValidatedPath};
 use serde::{Serialize, Deserialize};
 use validator::Validate;
 use validator_derive::Validate;
@@ -146,7 +147,7 @@ async fn resume_token(
     auth.try_permission("token", "resume")?;
     let claims = auth.claims.as_ref().ok_or_else(|| ApiError::MissingAuthorizationHeader)?;
     app_data.query.token
-        .revoke_token(&*app_data.db.read().await, claims.jti)
+        .revoke_token(&*app_data.db.read().await, claims.jti, None)
         .await
         .map_err(|e| internal_server_error!(e))?;
     let (response, msg) = acquire_token_impl_impl(
@@ -163,37 +164,36 @@ async fn resume_token(
     respond(response)
 }
 
-#[derive(Debug, Serialize)]
-struct ListTokenResponse {
-    tokens: Vec<Token>,
-}
-
-async fn list_token_for_me(
-    app_data: web::Data<AppState>,
-    auth: Auth,
-) -> ApiResult<ListTokenResponse> {
-    auth.try_permission("token", "list-self")?;
-    let uid = auth.claims.as_ref().ok_or_else(|| ApiError::MissingAuthorizationHeader)?.uid;
-    let tokens = app_data.query.token
-        .find_tokens_from_user(&*app_data.db.read().await, uid)
-        .await
-        .map_err(|e| internal_server_error!(e))?;
-    respond(ListTokenResponse {
-        tokens,
-    })
-}
+// #[derive(Debug, Serialize)]
+// struct ListTokenResponse {
+//     tokens: Vec<Token>,
+// }
+//
+// async fn list_token_for_me(
+//     app_data: web::Data<AppState>,
+//     auth: Auth,
+// ) -> ApiResult<ListTokenResponse> {
+//     auth.try_permission("token", "list-self")?;
+//     let uid = auth.claims.as_ref().ok_or_else(|| ApiError::MissingAuthorizationHeader)?.uid;
+//     let tokens = app_data.query.token
+//         .find_tokens_from_user(&*app_data.db.read().await, uid)
+//         .await
+//         .map_err(|e| internal_server_error!(e))?;
+//     respond(ListTokenResponse {
+//         tokens,
+//     })
+// }
 
 #[derive(Debug, Serialize)]
 struct RevokeTokenResponse {
     count: usize,
 }
 
-async fn revoke_token_for_me(
+async fn revoke_token_by_user_impl(
     app_data: web::Data<AppState>,
     auth: Auth,
+    uid: i32,
 ) -> ApiResult<RevokeTokenResponse> {
-    auth.try_permission("token", "revoke-self")?;
-    let uid = auth.claims.as_ref().ok_or_else(|| ApiError::MissingAuthorizationHeader)?.uid;
     let results = app_data.query.token
         .revoke_tokens_from_user(&*app_data.db.read().await, uid)
         .await
@@ -215,6 +215,88 @@ async fn revoke_token_for_me(
     })
 }
 
+async fn revoke_token_for_me(
+    app_data: web::Data<AppState>,
+    auth: Auth,
+) -> ApiResult<RevokeTokenResponse> {
+    auth.try_permission("token", "revoke-self")?;
+    let uid = auth.claims.as_ref().ok_or_else(|| ApiError::MissingAuthorizationHeader)?.uid;
+    revoke_token_by_user_impl(app_data, auth, uid).await
+}
+
+#[derive(Debug, Validate, Deserialize)]
+struct UidPath {
+    #[validate]
+    uid: Id,
+}
+
+async fn revoke_token_for_someone(
+    app_data: web::Data<AppState>,
+    auth: Auth,
+    uid_path: ValidatedPath<UidPath>,
+) -> ApiResult<RevokeTokenResponse> {
+    auth.try_permission("token", "revoke")?;
+    let uid = uid_path.uid.clone().into();
+    revoke_token_by_user_impl(app_data, auth, uid).await
+}
+
+#[derive(Debug, Validate, Deserialize)]
+struct JtiPath {
+    #[validate]
+    jti: Id,
+}
+
+async fn revoke_single_token_impl(
+    app_data: web::Data<AppState>,
+    auth: Auth,
+    jti: i32,
+    uid: Option<i32>,
+) -> ApiResult<()> {
+    let result = app_data.query.token
+        .revoke_token(&*app_data.db.read().await, jti, uid)
+        .await
+        .map_err(|err| match err {
+            QueryError::TokenNotFound => ApiError::TokenNotFound,
+            e => internal_server_error!(e),
+        })?;
+    app_data.send(TokenRevoked {
+        jti: result.id,
+        uid: result.user,
+    }, &auth)
+        .await
+        .map_err(|e| internal_server_error!(e))?;
+    respond(())
+}
+
+async fn revoke_single_token(
+    app_data: web::Data<AppState>,
+    jti_path: ValidatedPath<JtiPath>,
+    auth: Auth,
+) -> ApiResult<()> {
+    auth.try_permission("token", "revoke-single")?;
+    revoke_single_token_impl(app_data, auth, jti_path.jti.clone().into(), None).await
+}
+
+async fn revoke_single_token_for_me(
+    app_data: web::Data<AppState>,
+    jti_path: ValidatedPath<JtiPath>,
+    auth: Auth,
+) -> ApiResult<()> {
+    auth.try_permission("token", "revoke-single")?;
+    let uid = auth.claims.as_ref().ok_or_else(|| ApiError::MissingAuthorizationHeader)?.uid;
+    revoke_single_token_impl(app_data, auth, jti_path.jti.clone().into(), Some(uid)).await
+}
+
+async fn revoke_this_token_for_me(
+    app_data: web::Data<AppState>,
+    auth: Auth,
+) -> ApiResult<()> {
+    auth.try_permission("token", "revoke-single")?;
+    let claims = auth.claims.as_ref().ok_or_else(|| ApiError::MissingAuthorizationHeader)?;
+    let jti = claims.jti;
+    let uid = claims.uid;
+    revoke_single_token_impl(app_data, auth, jti, Some(uid)).await
+}
 
 pub fn tokens_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::ServiceConfig)> {
     let state = state.clone();
@@ -226,14 +308,16 @@ pub fn tokens_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::Servi
                 .route("/acquire-by-username", web::post().to(acquire_token_by_username))
                 .route("/acquire-by-email", web::post().to(acquire_token_by_email))
                 .route("/resume", web::post().to(resume_token))
-                .route("/users/me", web::get().to(list_token_for_me))
+                // .route("/users/me", web::get().to(list_token_for_me))
                 .route("/users/me", web::delete().to(revoke_token_for_me))
                 // .route("/users/{uid}", web::get().to(list_token_by_uid))
-                // .route("/users/{uid}", web::delete().to(revoke_token_by_uid))
+                .route("/users/{uid}", web::delete().to(revoke_token_for_someone))
                 // .route("/jwt/{jti}", web::get().to(read_token_by_jti))
-                // .route("/jwt/{jti}", web::delete().to(revoke_token_by_jti))
+                .route("/jwt/{jti}", web::delete().to(revoke_single_token))
+                // .route("/my-jwt/this", web::get().to(read_token_by_jti))
+                .route("/my-jwt/this", web::delete().to(revoke_this_token_for_me))
                 // .route("/my-jwt/{jti}", web::get().to(read_token_for_me_by_jti))
-                // .route("/my-jwt/{jti}", web::delete().to(revoke_token_for_me_by_jti))
+                .route("/my-jwt/{jti}", web::delete().to(revoke_single_token_for_me))
         );
     })
 }

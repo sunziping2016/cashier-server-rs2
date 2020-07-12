@@ -15,6 +15,7 @@ pub struct Query {
     get_secret: Statement,
     check_token_revoked: Statement,
     revoke_token: Statement,
+    revoke_token_with_uid: Statement,
     find_tokens_from_user: Statement,
     revoke_tokens_from_user: Statement,
 }
@@ -62,8 +63,16 @@ impl Query {
             &[Type::INT4],
         ).await.unwrap();
         let revoke_token = client.prepare_typed(
-            "UPDATE token SET revoked = true WHERE id = $1 AND NOT revoked",
+            "UPDATE token SET revoked = true \
+                WHERE id = $1 AND NOT revoked \
+                RETURNING id, \"user\"",
             &[Type::INT4]
+        ).await.unwrap();
+        let revoke_token_with_uid = client.prepare_typed(
+            "UPDATE token SET revoked = true \
+                WHERE id = $1 AND \"user\" = $2 AND NOT revoked \
+                RETURNING id, \"user\"",
+            &[Type::INT4, Type::INT4]
         ).await.unwrap();
         let find_tokens_from_user = client.prepare_typed(
             "SELECT id, \"user\", issued_at, expires_at, acquire_method, \
@@ -82,6 +91,7 @@ impl Query {
             get_secret,
             check_token_revoked,
             revoke_token,
+            revoke_token_with_uid,
             find_tokens_from_user,
             revoke_tokens_from_user,
         }
@@ -126,11 +136,22 @@ impl Query {
         }
         Ok(())
     }
-    pub async fn revoke_token(&self, client: &Client, id: i32) -> Result<u64> {
-        let count = client
-            .execute(&self.revoke_token, &[&id])
-            .await?;
-        Ok(count)
+    pub async fn revoke_token(&self, client: &Client, id: i32, uid: Option<i32>) -> Result<TokenIdUser> {
+        let rows = match uid {
+            Some(uid) => client
+                .query(&self.revoke_token_with_uid, &[&id, &uid])
+                .await?,
+            None => client
+                .query(&self.revoke_token, &[&id])
+                .await?,
+        };
+        let row = rows
+            .get(0)
+            .ok_or_else(|| Error::TokenNotFound)?;
+        Ok(TokenIdUser {
+            id: row.get("id"),
+            user: row.get("user"),
+        })
     }
     pub async fn find_tokens_from_user(&self, client: &Client, user: i32) -> Result<Vec<Token>> {
         let rows = client

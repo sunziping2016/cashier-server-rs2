@@ -81,6 +81,8 @@ pub enum ApiError {
     UserEmailUpdating {
         reason: String,
     },
+    #[error(display = "cannot find the token")]
+    TokenNotFound,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -203,7 +205,8 @@ impl From<ApiError> for ApiErrorWrapper {
             | ApiError::UserRegistration { .. }
             | ApiError:: UserEmailUpdating { .. } => 400,
             ApiError::DuplicatedUser { .. } => 409,
-            ApiError::UserNotFound => 404,
+            ApiError::UserNotFound
+            | ApiError::TokenNotFound => 404,
         };
         ApiErrorWrapper {
             code,
@@ -238,7 +241,8 @@ impl ResponseError for ApiError {
                 HttpResponse::BadRequest().json(ApiErrorWrapper::from(self.clone())),
             ApiError::DuplicatedUser { .. } =>
                 HttpResponse::Conflict().json(ApiErrorWrapper::from(self.clone())),
-            ApiError::UserNotFound =>
+            ApiError::UserNotFound
+            | ApiError::TokenNotFound =>
                 HttpResponse::NotFound().json(ApiErrorWrapper::from(self.clone())),
         }
     }
