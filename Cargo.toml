@@ -4,4 +4,5 @@ members = [
     "packages/shell-macro",
     "packages/shell-macro-impl",
     "packages/multer",
+    "packages/cashier-query",
 ]

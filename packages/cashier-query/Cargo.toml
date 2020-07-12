@@ -1,0 +1,8 @@
+[package]
+name = "cashier-query"
+version = "0.1.0"
+authors = ["Sun Ziping <sunziping2016@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+nom = "5.1.2"
