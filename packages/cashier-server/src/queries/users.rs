@@ -14,8 +14,6 @@ use tokio_postgres::{
     IsolationLevel, Row,
 };
 use crate::api::app_state::AppState;
-use crate::api::extractors::auth::Auth;
-use crate::queries::errors::Error::DuplicatedUser;
 
 struct Digit;
 
@@ -1320,7 +1318,7 @@ impl Query {
                 .get(0)
                 .map(|x| x.get::<&str, i32>("id"))
                 .is_some() {
-                return Err(DuplicatedUser { field: "username".into() });
+                return Err(Error::DuplicatedUser { field: "username".into() });
             }
             _ => ()
         }
@@ -1331,7 +1329,7 @@ impl Query {
                 .get(0)
                 .map(|x| x.get::<&str, i32>("id"))
                 .is_some() {
-                return Err(DuplicatedUser { field: "email".into() });
+                return Err(Error::DuplicatedUser { field: "email".into() });
             }
             _ => ()
         }
@@ -1397,15 +1395,8 @@ impl Query {
         })
     }
     pub async fn confirm_email_updating(
-        &self, client: &mut Client, auth: &Auth, id: &str, code: &str,
+        &self, client: &mut Client, id: &str, code: &str, required_uid: Option<i32>,
     ) -> Result<UserIdEmailUpdatedAt> {
-        if !auth.has_permission("user-email-updating", "confirm-self") &&
-            !auth.has_permission("user-email-updating", "confirm") {
-            return Err(Error::PermissionDenied {
-                subject: "user-email-updating".into(),
-                action: "confirm".into(),
-            })
-        }
         let transaction = client.build_transaction()
             .isolation_level(IsolationLevel::RepeatableRead)
             .start()
@@ -1420,12 +1411,11 @@ impl Query {
         let user: i32 = row.get("user");
         let new_email: String = row.get("new_email");
         let expires_at: DateTime<Utc> = row.get("expires_at");
-        if (auth.claims.is_none() || auth.claims.as_ref().unwrap().uid != user) &&
-            !auth.has_permission("user-email-updating", "confirm") {
-            return Err(Error::PermissionDenied {
-                subject: "user-email-updating".into(),
-                action: "confirm".into(),
-            })
+        match required_uid {
+            Some(required_uid) => if required_uid != user {
+                return Err(Error::UserNotMatch)
+            }
+            None => (),
         }
         if expires_at < Utc::now() {
             return Err(Error::UserEmailUpdatingExpired);
@@ -1456,15 +1446,8 @@ impl Query {
         })
     }
     pub async fn query_email_updating(
-        &self, client: &Client, auth: &Auth, id: &str,
+        &self, client: &Client, id: &str, required_uid: Option<i32>,
     ) -> Result<UserEmailUpdatingPublic> {
-        if !auth.has_permission("user-email-updating", "read-self") &&
-            !auth.has_permission("user-email-updating", "read") {
-            return Err(Error::PermissionDenied {
-                subject: "user-email-updating".into(),
-                action: "read".into(),
-            })
-        }
         let rows = client
             .query(&self.query_email_updating, &[&id])
             .await?;
@@ -1472,12 +1455,11 @@ impl Query {
             .get(0)
             .ok_or_else(|| Error::UserEmailUpdatingNotFound)?;
         let registration = UserEmailUpdatingPublic::from(row);
-        if (auth.claims.is_none() || auth.claims.as_ref().unwrap().uid != registration.user) &&
-            !auth.has_permission("user-email-updating", "read") {
-            return Err(Error::PermissionDenied {
-                subject: "user-email-updating".into(),
-                action: "read".into(),
-            })
+        match required_uid {
+            Some(required_uid) => if required_uid != registration.user {
+                return Err(Error::UserNotMatch)
+            }
+            None => (),
         }
         if registration.completed.is_none() && registration.expires_at < Utc::now() {
             return Err(Error::UserEmailUpdatingExpired);
@@ -1487,16 +1469,9 @@ impl Query {
     pub async fn resend_email_updating_email(
         &self, client: &Client,
         app_data: web::Data<AppState>,
-        auth: &Auth,
         sender: &str, site: &str, id: &str,
+        required_uid: Option<i32>,
     ) -> Result<()> {
-        if !auth.has_permission("user-email-updating", "resend-self") &&
-            !auth.has_permission("user-email-updating", "resend") {
-            return Err(Error::PermissionDenied {
-                subject: "user-email-updating".into(),
-                action: "resend".into(),
-            })
-        }
         let rows = client
             .query(&self.find_one_from_user_email_updating_join_user, &[&id])
             .await?;
@@ -1508,12 +1483,11 @@ impl Query {
         let username: String = row.get("username");
         let email: String = row.get("new_email");
         let expires_at: DateTime<Utc> = row.get("expires_at");
-        if (auth.claims.is_none() || auth.claims.as_ref().unwrap().uid != uid) &&
-            !auth.has_permission("user-email-updating", "resend") {
-            return Err(Error::PermissionDenied {
-                subject: "user-email-updating".into(),
-                action: "resend".into(),
-            })
+        match required_uid {
+            Some(required_uid) => if required_uid != uid {
+                return Err(Error::UserNotMatch)
+            }
+            None => (),
         }
         if expires_at < Utc::now() {
             return Err(Error::UserEmailUpdatingExpired);

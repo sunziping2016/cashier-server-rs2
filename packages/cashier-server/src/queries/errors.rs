@@ -49,11 +49,8 @@ pub enum Error {
     UserEmailUpdatingExpired,
     #[error(display = "user registration wrong code")]
     UserEmailUpdatingWrongCode,
-    #[error(display = "permission denied, requires {} {} permission", action, subject)]
-    PermissionDenied {
-        subject: String,
-        action: String,
-    },
+    #[error(display = "unmatched user")]
+    UserNotMatch,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

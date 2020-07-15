@@ -5,6 +5,8 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use nom::Err;
 
+type UtcDateTime = chrono::DateTime<chrono::Utc>;
+
 #[derive(Debug, Error, PartialEq)]
 pub enum Error {
     #[error(display = "invalid value for field \"{}\", expect {}", field, accepted_type)]
@@ -44,10 +46,10 @@ pub struct FieldConfig {
     pub escape_handler: Option<EscapeHandler>,
 }
 
-pub type EscapeHandler = Box<dyn Fn(&str, &FieldConfig) -> Result<String>>;
+pub type EscapeHandler = Box<dyn Fn(&str, &FieldConfig) -> Result<String> + Sync + Send>;
 
 pub fn escape_quoted_with_converter<T: FromStr>(
-    converter: impl Fn(&T) -> String + 'static,
+    converter: impl Fn(&T) -> String + 'static + Sync + Send,
 ) -> EscapeHandler {
     Box::new(move |input: &str, config: &FieldConfig| {
         let value: T = input.parse()
@@ -64,7 +66,7 @@ pub fn escape_quoted<T: FromStr + ToString + 'static>() -> EscapeHandler {
 }
 
 pub fn escape_unquoted_with_converter<T: FromStr>(
-    converter: impl Fn(&T) -> String + 'static,
+    converter: impl Fn(&T) -> String + 'static + Sync + Send,
 ) -> EscapeHandler {
     Box::new(move |input: &str, config: &FieldConfig| {
         let value: T = input.parse()
@@ -90,6 +92,42 @@ impl FieldConfig {
             partial_order: false,
             partial_equal: false,
             use_like: false,
+            escape_handler: None,
+        }
+    }
+    pub fn new_number_field<T>(field: &str, rename: Option<String>) -> Self {
+        Self {
+            field: field.into(),
+            rename,
+            type_name: None,
+            wildcard: false,
+            partial_order: true,
+            partial_equal: true,
+            use_like: false,
+            escape_handler: Some(escape_unquoted::<i32>()),
+        }
+    }
+    pub fn new_date_time_field(field: &str, rename: Option<String>) -> Self {
+        Self {
+            field: field.into(),
+            rename,
+            type_name: Some("DateTime".into()),
+            wildcard: false,
+            partial_order: true,
+            partial_equal: true,
+            use_like: false,
+            escape_handler: Some(escape_quoted_with_converter(UtcDateTime::to_rfc3339)),
+        }
+    }
+    pub fn new_string_field(field: &str, rename: Option<String>) -> Self {
+        Self {
+            field: field.into(),
+            rename,
+            type_name: None,
+            wildcard: true,
+            partial_order: true,
+            partial_equal: true,
+            use_like: true,
             escape_handler: None,
         }
     }
@@ -142,7 +180,28 @@ impl QueryConfig {
         self.fields.insert(field.field.clone(), field);
         self
     }
-    pub fn parse_to_postgres(&self, input: &str) -> Result<Option<String>> {
+    pub fn check_sortable(&self, field: &str) -> Result<String> {
+        let config = self.fields.get(field)
+            .ok_or_else(|| Error::UnknownField { field: field.into() })?;
+        if config.partial_order == false {
+            return Err(Error::UnsupportedOperation {
+                field: field.into(),
+                required_operation: "order".into(),
+            });
+        }
+        Ok(config.rename.clone().unwrap_or_else(|| field.into()))
+    }
+    pub fn map_field(&self, field: &str) -> Result<String> {
+        let config = self.fields.get(field)
+            .ok_or_else(|| Error::UnknownField { field: field.into() })?;
+        Ok(config.rename.clone().unwrap_or_else(|| field.into()))
+    }
+    pub fn map_field_value(&self, field: &str, value: &str) -> Result<(String, String)> {
+        let config = self.fields.get(field)
+            .ok_or_else(|| Error::UnknownField { field: field.into() })?;
+        Ok((config.rename.clone().unwrap_or_else(|| field.into()), config.escape(value)?))
+    }
+    pub fn parse_to_postgres(&self, input: &str) -> Result<String> {
         Ok(parse(input)
             .map_err(|err| match err {
                 Err::Incomplete(..) => Error::ParseError { pos: input.len() },
@@ -152,7 +211,8 @@ impl QueryConfig {
             .1
             .as_ref()
             .map(|x| self.query_to_postgres(x))
-            .transpose()?)
+            .transpose()?
+            .unwrap_or_else(|| "TRUE".into()))
     }
     pub fn query_to_postgres(&self, query: &Query) -> Result<String> {
         let result = match query {
@@ -186,7 +246,7 @@ impl QueryConfig {
                             .replace("^", "^^")
                             .replace("%", "^%")
                             .replace("_", "^_");
-                        format!("{} ILIKE '%' || {} || '%' ESCAPE '^'", rename, value)
+                        format!("{} ILIKE '%{}%' ESCAPE '^'", rename, &value[1..value.len() - 1])
                     } else {
                         format!("{} = {}", rename, value)
                     }
@@ -202,7 +262,7 @@ impl QueryConfig {
                                     .replace("^", "^^")
                                     .replace("%", "^%")
                                     .replace("_", "^_");
-                                format!("{} ILIKE '%' || {} || '%' ESCAPE '^'", rename, value)
+                                format!("{} ILIKE '%{}%' ESCAPE '^'", rename, &value[1..value.len() - 1])
                             } else {
                                 format!("{} = {}", rename, value)
                             })
@@ -265,7 +325,6 @@ impl QueryConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    type UtcDateTime = chrono::DateTime<chrono::Utc>;
 
     #[test]
     pub fn escape_to_string_test() {
@@ -326,24 +385,24 @@ mod tests {
             );
         assert_eq!(
             generator.parse_to_postgres("id > 1 and (id < 1 id: 1)"),
-            Ok(Some("((id > 1) AND ((id < 1) OR (id = 1)))".into()))
+            Ok("((id > 1) AND ((id < 1) OR (id = 1)))".into())
         );
         assert_eq!(
             generator.parse_to_postgres("\n"),
-            Ok(None)
+            Ok("TRUE".into())
         );
         assert_eq!(
             generator.parse_to_postgres("* > 2"),
-            Ok(Some("(id > 2)".into()))
+            Ok("(id > 2)".into())
         );
         let result = generator.parse_to_postgres("1");
         assert!(
-            result == Ok(Some("(id = 1 OR \"text\" ILIKE '%' || '1' || '%' ESCAPE '^')".into()))
-            || result == Ok(Some("(\"text\" ILIKE '%' || '1' || '%' ESCAPE '^' OR id = 1)".into()))
+            result == Ok("(id = 1 OR \"text\" ILIKE '%1%' ESCAPE '^')".into())
+            || result == Ok("(\"text\" ILIKE '%1%' ESCAPE '^' OR id = 1)".into())
         );
         assert_eq!(
             generator.parse_to_postgres("ab%c"),
-            Ok(Some("(\"text\" ILIKE '%' || 'ab^%c' || '%' ESCAPE '^')".into()))
+            Ok("(\"text\" ILIKE '%ab^%c%' ESCAPE '^')".into())
         );
     }
 }

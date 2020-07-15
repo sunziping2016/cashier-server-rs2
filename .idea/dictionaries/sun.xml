@@ -2,9 +2,12 @@
   <dictionary name="sun">
     <words>
       <w>bcrypt</w>
+      <w>chrono</w>
+      <w>ilike</w>
       <w>multer</w>
       <w>smtp</w>
       <w>subcommand</w>
+      <w>unsortable</w>
     </words>
   </dictionary>
 </component>

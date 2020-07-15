@@ -127,4 +127,23 @@ jwt如果被revoke，user如果被删除或block，ClientSubscriber收到这个�
 
 ## 4 用户注册流程
 
-提供API查询用户名或密码是否被占用。如果被占用则报错。通过验证后，生成随机的长度为40的ID串以及6位数字密码。发送邮件给用户，其中邮件包含数字密码。邮件发送成功后，写入临时用户表，`completed`为`null`。而后id返回给前端。验证时，将id和验证码POST到后端，后端从`completed`为`null`，id为指定id的临时用户表中读取数据，确认是否expire，确认验证码是否正确，，再次确认用户名和密码是否被占用，如果成功后创建用户，并且置`completed`为true，这部分需要repeated read隔离等级。
+提供API查询用户名或密码是否被占用。如果被占用则报错。通过验证后，生成随机的长度为40的ID串以及6位数字密码。发送邮件给用户，其中邮件包含数字密码。邮件发送成功后，写入临时用户表，`completed`为`null`。而后id返回给前端。验证时，将id和验证码POST到后端，后端从`completed`为`null`，id为指定id的临时用户表中读取数据，确认是否expire，确认验证码是否正确，再次确认用户名和密码是否被占用，如果成功后创建用户，并且置`completed`为true，这部分需要repeated read隔离等级。
+
+## 5 基于Cursor的分页
+
+所有的Cursor都是JSON：
+
+```json
+{
+  "k": "",
+  "v": "",
+  "id": 1
+}
+```
+
+| |before|after|
+|:---:|:---:|:---:|
+|asc| \< DESC (need reverse) | \> ASC |
+|desc| \> ASC (need reverse) | \< DESC |
+
+before和after不能同时使用。

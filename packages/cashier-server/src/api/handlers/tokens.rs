@@ -2,7 +2,11 @@ use crate::{
     api::{
         extractors::{
             auth::Auth,
-            config::default_json_config,
+            config::{
+                default_json_config,
+                default_path_config,
+                default_query_config,
+            },
         },
         errors::{ApiError, ApiResult, respond},
         app_state::AppState,
@@ -10,8 +14,11 @@ use crate::{
             Username,
             Password,
             Email,
+            Cursor as CursorField,
+            Id,
+            PaginationSize,
         },
-        fields::{Id}
+        cursor::Cursor,
     },
     queries::{
         tokens::Token,
@@ -25,11 +32,14 @@ use actix_web::{
     web,
     http::HeaderValue,
 };
-use actix_web_validator::{ValidatedJson, ValidatedPath};
+use actix_web_validator::{ValidatedJson, ValidatedPath, ValidatedQuery};
+use lazy_static::lazy_static;
 use serde::{Serialize, Deserialize};
 use validator::Validate;
 use validator_derive::Validate;
+use cashier_query::generator::{QueryConfig, FieldConfig};
 use chrono::{DateTime, NaiveDateTime, Utc};
+use crate::api::cursor::PrimaryCursor;
 
 #[derive(Debug, Serialize)]
 struct AcquireTokenResponse {
@@ -100,7 +110,7 @@ async fn acquire_token_by_username(
     let uid = app_data.query.user
         .check_user_valid(&*app_data.db.read().await,
                           &EitherUsernameOrEmail::Username(data.username.clone().into()),
-                          &data.password)
+                          &data.password[..])
         .await
         .map_err(|e| match e {
             QueryError::UserNotFound | QueryError::WrongPassword => ApiError::WrongUserOrPassword,
@@ -129,7 +139,7 @@ async fn acquire_token_by_email(
     let uid = app_data.query.user
         .check_user_valid(&*app_data.db.read().await,
                           &EitherUsernameOrEmail::Email(data.email.clone().into()),
-                          &data.password)
+                          &data.password[..])
         .await
         .map_err(|e| match e {
             QueryError::UserNotFound | QueryError::WrongPassword => ApiError::WrongUserOrPassword,
@@ -164,25 +174,121 @@ async fn resume_token(
     respond(response)
 }
 
-// #[derive(Debug, Serialize)]
-// struct ListTokenResponse {
-//     tokens: Vec<Token>,
-// }
-//
-// async fn list_token_for_me(
-//     app_data: web::Data<AppState>,
-//     auth: Auth,
-// ) -> ApiResult<ListTokenResponse> {
-//     auth.try_permission("token", "list-self")?;
-//     let uid = auth.claims.as_ref().ok_or_else(|| ApiError::MissingAuthorizationHeader)?.uid;
-//     let tokens = app_data.query.token
-//         .find_tokens_from_user(&*app_data.db.read().await, uid)
-//         .await
-//         .map_err(|e| internal_server_error!(e))?;
-//     respond(ListTokenResponse {
-//         tokens,
-//     })
-// }
+#[derive(Debug, Validate, Deserialize)]
+struct ListTokenForMeRequest {
+    #[validate]
+    before: Option<CursorField>,
+    #[validate]
+    after: Option<CursorField>,
+    #[validate]
+    #[serde(default)]
+    size: PaginationSize,
+    sort: Option<String>,
+    #[serde(default)]
+    desc: bool,
+    #[serde(default)]
+    query: String,
+}
+
+#[derive(Debug, Serialize)]
+struct TokenCursor {
+    token: Token,
+    cursor: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ListTokenResponse {
+    results: Vec<TokenCursor>,
+}
+
+lazy_static! {
+    pub static ref LIST_TOKEN_FOR_ME_GENERATOR: QueryConfig = QueryConfig::new()
+        .field(FieldConfig::new_number_field::<i32>("id", None))
+        .field(FieldConfig::new_date_time_field("issued_at", None))
+        .field(FieldConfig::new_date_time_field("expires_at", None))
+        .field(FieldConfig::new_string_field("acquire_method", None))
+        .field(FieldConfig::new_string_field("acquire_host", None))
+        .field(FieldConfig::new_string_field("acquire_remote", None))
+        .field(FieldConfig::new_string_field("acquire_user_agent", None));
+}
+
+async fn list_token_for_me(
+    app_data: web::Data<AppState>,
+    request: ValidatedQuery<ListTokenForMeRequest>,
+    auth: Auth,
+) -> ApiResult<ListTokenResponse> {
+    auth.try_permission("token", "list-self")?;
+    let _uid = auth.claims.as_ref().ok_or_else(|| ApiError::MissingAuthorizationHeader)?.uid;
+    if request.before.is_some() && request.after.is_some() {
+        return Err(ApiError::QueryError {
+            error: "".into(),
+        });
+    }
+    let direction = if request.before.is_some() == request.desc { "ASC" } else { "DESC" };
+    let order_by = match request.sort.clone() {
+        Some(sort) => format!("{} {}, id {}",
+                              LIST_TOKEN_FOR_ME_GENERATOR.check_sortable(&sort)?,
+                              direction, direction),
+        None => format!("id {}", direction),
+    };
+    let mut condition = vec![
+        "NOT revoked".into(),
+        LIST_TOKEN_FOR_ME_GENERATOR.parse_to_postgres(&request.query)?,
+    ];
+    if let Some(before) = request.before.clone() {
+        let before = Cursor::try_from_str(&before[..])?;
+        before.check_key(&request.sort)?;
+        condition.push(before.to_sql(&LIST_TOKEN_FOR_ME_GENERATOR, request.desc)?)
+    }
+    if let Some(after) = request.after.clone() {
+        let after = Cursor::try_from_str(&after[..])?;
+        after.check_key(&request.sort)?;
+        condition.push(after.to_sql(&LIST_TOKEN_FOR_ME_GENERATOR, !request.desc)?)
+    }
+    let condition = condition.join(" AND ");
+    let statement = format!(
+        "SELECT id, \"user\", issued_at, expires_at, acquire_method, \
+                acquire_host, acquire_remote, acquire_user_agent FROM token \
+        WHERE {} ORDER BY {} LIMIT {}", condition, order_by, usize::from(request.size.clone()));
+    println!("{}", statement);
+    let rows = app_data.db.read().await
+        .query(&statement[..], &[])
+        .await
+        .map_err(|e| internal_server_error!(e))?;
+    let mut results = rows.iter()
+        .map(|row| {
+            let token = Token::from(row);
+            let cursor = Cursor::new(token.id.to_string(), match request.sort.as_ref().map(|x| &x[..]) {
+                Some(field) => match field {
+                    "id" => Some(PrimaryCursor { k: "id".into(), v: Some(token.id.to_string()) }),
+                    "issued_at" => Some(PrimaryCursor { k: "issued_at".into(),
+                        v: Some(token.issued_at.to_rfc3339()) }),
+                    "expires_at" => Some(PrimaryCursor { k: "expires_at".into(),
+                        v: Some(token.expires_at.to_rfc3339()) }),
+                    "acquire_method" => Some(PrimaryCursor { k: "acquire_method".into(),
+                        v: Some(token.acquire_method.clone()) }),
+                    "acquire_host" => Some(PrimaryCursor { k: "acquire_host".into(),
+                        v: Some(token.acquire_host.clone()) }),
+                    "acquire_remote" => Some(PrimaryCursor { k: "acquire_remote".into(),
+                        v: token.acquire_remote.clone() }),
+                    "acquire_user_agent" => Some(PrimaryCursor { k: "acquire_user_agent".into(),
+                        v: token.acquire_user_agent.clone() }),
+                    _ => None
+                },
+                _ => None,
+            });
+            cursor.try_to_str()
+                .map(|cursor| TokenCursor {
+                    token,
+                    cursor,
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if request.before.is_some() {
+        results.reverse();
+    }
+    respond(ListTokenResponse { results })
+}
 
 #[derive(Debug, Serialize)]
 struct RevokeTokenResponse {
@@ -305,10 +411,12 @@ pub fn tokens_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::Servi
             web::scope("/tokens")
                 .app_data(state)
                 .app_data(default_json_config())
+                .app_data(default_path_config())
+                .app_data(default_query_config())
                 .route("/acquire-by-username", web::post().to(acquire_token_by_username))
                 .route("/acquire-by-email", web::post().to(acquire_token_by_email))
                 .route("/resume", web::post().to(resume_token))
-                // .route("/users/me", web::get().to(list_token_for_me))
+                .route("/users/me", web::get().to(list_token_for_me))
                 .route("/users/me", web::delete().to(revoke_token_for_me))
                 // .route("/users/{uid}", web::get().to(list_token_by_uid))
                 .route("/users/{uid}", web::delete().to(revoke_token_for_someone))

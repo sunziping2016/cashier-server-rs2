@@ -3,6 +3,7 @@ pub mod errors;
 pub mod handlers;
 pub mod extractors;
 pub mod fields;
+pub mod cursor;
 
 use crate::{
     websocket::client_subscriber::ClientSubscriber,

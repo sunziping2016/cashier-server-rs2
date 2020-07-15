@@ -1,6 +1,7 @@
 use actix_web_validator::{
     JsonConfig,
     PathConfig,
+    QueryConfig,
     Error,
 };
 use crate::api::errors::ApiError;
@@ -20,6 +21,14 @@ pub fn default_json_config() -> JsonConfig {
 
 pub fn default_path_config() -> PathConfig {
     PathConfig::default()
+        .error_handler(|err, _req| match err {
+            Error::Validate(e) => ApiError::from(e),
+            e => ApiError::JsonPayloadError { error: format!("{}", e) },
+        }.into())
+}
+
+pub fn default_query_config() -> QueryConfig {
+    QueryConfig::default()
         .error_handler(|err, _req| match err {
             Error::Validate(e) => ApiError::from(e),
             e => ApiError::JsonPayloadError { error: format!("{}", e) },

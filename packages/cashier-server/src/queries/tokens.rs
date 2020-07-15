@@ -1,10 +1,7 @@
 use super::errors::{Error, Result};
 use chrono::{DateTime, Utc};
 use serde::{Serialize, Deserialize};
-use tokio_postgres::{
-    Client, Statement,
-    types::Type
-};
+use tokio_postgres::{Client, Statement, types::Type, Row};
 use jsonwebtoken::{
     encode, EncodingKey, Header,
     decode, DecodingKey, Validation,
@@ -38,6 +35,21 @@ pub struct Token {
     pub acquire_host: String,
     pub acquire_remote: Option<String>,
     pub acquire_user_agent: Option<String>,
+}
+
+impl From<&Row> for Token {
+    fn from(row: &Row) -> Self {
+        Self {
+            id: row.get("id"),
+            user: row.get("user"),
+            issued_at: row.get("issued_at"),
+            expires_at: row.get("expires_at"),
+            acquire_method: row.get("acquire_method"),
+            acquire_host: row.get("acquire_host"),
+            acquire_remote: row.get("acquire_remote"),
+            acquire_user_agent: row.get("acquire_user_agent"),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -158,16 +170,7 @@ impl Query {
             .query(&self.find_tokens_from_user, &[&user])
             .await?;
         let results = rows.iter()
-            .map(|row| Token {
-                id: row.get("id"),
-                user: row.get("user"),
-                issued_at: row.get("issued_at"),
-                expires_at: row.get("expires_at"),
-                acquire_method: row.get("acquire_method"),
-                acquire_host: row.get("acquire_host"),
-                acquire_remote: row.get("acquire_remote"),
-                acquire_user_agent: row.get("acquire_user_agent"),
-            })
+            .map(Token::from)
             .collect();
         Ok(results)
     }

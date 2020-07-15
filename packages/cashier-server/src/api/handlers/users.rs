@@ -6,6 +6,7 @@ use crate::{
             config::{
                 default_json_config,
                 default_path_config,
+                default_query_config,
                 avatar_multer_config,
             },
         },
@@ -780,13 +781,13 @@ enum QueryEmailUpdatingResponse {
     Rejected(UserEmailUpdatingPublic),
 }
 
-async fn query_email_updating(
+async fn query_email_updating_impl(
     app_data: web::Data<AppState>,
-    path: ValidatedPath<UpdateIdPath>,
-    auth: Auth,
+    updated_id: &str,
+    uid: Option<i32>
 ) -> ApiResult<QueryEmailUpdatingResponse> {
     let result = match app_data.query.user
-        .query_email_updating(&*app_data.db.read().await, &auth, &path.update_id[..])
+        .query_email_updating(&*app_data.db.read().await, updated_id, uid)
         .await {
         Ok(value) => {
             match value.completed {
@@ -795,15 +796,34 @@ async fn query_email_updating(
                 None => QueryEmailUpdatingResponse::Processing(value),
             }
         },
-        Err(QueryError::PermissionDenied { subject, action }) => return Err(ApiError::PermissionDenied {
-            subject,
-            action,
+        Err(QueryError::UserNotMatch) => return Err(ApiError::PermissionDenied {
+            subject: "user-email-updating".into(),
+            action: "read".into(),
         }),
         Err(QueryError::UserEmailUpdatingExpired) => QueryEmailUpdatingResponse::Expired,
         Err(QueryError::UserEmailUpdatingNotFound) => QueryEmailUpdatingResponse::NotFound,
         Err(e) => return Err(internal_server_error!(e)),
     };
     respond(result)
+}
+
+async fn query_email_updating(
+    app_data: web::Data<AppState>,
+    path: ValidatedPath<UpdateIdPath>,
+    auth: Auth,
+) -> ApiResult<QueryEmailUpdatingResponse> {
+    auth.try_permission("user-email-updating", "read-self")?;
+    let uid = auth.claims.as_ref().ok_or_else(|| ApiError::MissingAuthorizationHeader)?.uid;
+    query_email_updating_impl(app_data, &path.update_id[..], Some(uid)).await
+}
+
+async fn query_email_updating_for_others(
+    app_data: web::Data<AppState>,
+    path: ValidatedPath<UpdateIdPath>,
+    auth: Auth,
+) -> ApiResult<QueryEmailUpdatingResponse> {
+    auth.try_permission("user-email-updating", "read")?;
+    query_email_updating_impl(app_data, &path.update_id[..], None).await
 }
 
 #[derive(Debug, Validate, Deserialize)]
@@ -813,15 +833,16 @@ struct ConfirmEmailUpdatingRequest {
     code: Any6,
 }
 
-async fn confirm_email_updating(
+async fn confirm_email_updating_impl(
     app_data: web::Data<AppState>,
-    request: ValidatedJson<ConfirmEmailUpdatingRequest>,
-    path: ValidatedPath<UpdateIdPath>,
     auth: Auth,
+    update_id: &str,
+    code: &str,
+    uid: Option<i32>
 ) -> ApiResult<()> {
     let result = app_data.query.user
-        .confirm_email_updating(&mut *app_data.db.write().await, &auth,
-                                &path.update_id[..], &request.code[..])
+        .confirm_email_updating(&mut *app_data.db.write().await,
+                                update_id, code, uid)
         .await
         .map_err(|err| match err {
             QueryError::UserEmailUpdatingNotFound => ApiError::UserEmailUpdating { reason: "NotFound".into() },
@@ -829,9 +850,9 @@ async fn confirm_email_updating(
             QueryError::UserEmailUpdatingWrongCode => ApiError::UserEmailUpdating { reason: "WrongCode".into() },
             QueryError::DuplicatedUser { field } => ApiError::DuplicatedUser { field },
             QueryError::UserNotFound => ApiError::UserNotFound,
-            QueryError::PermissionDenied { subject, action } => ApiError::PermissionDenied {
-                subject,
-                action,
+            QueryError::UserNotMatch => ApiError::PermissionDenied {
+                subject: "user-email-updating".into(),
+                action: "confirm".into(),
             },
             e => internal_server_error!(e),
         })?;
@@ -851,27 +872,67 @@ async fn confirm_email_updating(
     respond(())
 }
 
+async fn confirm_email_updating(
+    app_data: web::Data<AppState>,
+    request: ValidatedJson<ConfirmEmailUpdatingRequest>,
+    path: ValidatedPath<UpdateIdPath>,
+    auth: Auth,
+) -> ApiResult<()> {
+    auth.try_permission("user-email-updating", "confirm-self")?;
+    let uid = auth.claims.as_ref().ok_or_else(|| ApiError::MissingAuthorizationHeader)?.uid;
+    confirm_email_updating_impl(app_data, auth, &path.update_id[..], &request.code[..], Some(uid)).await
+}
+
+async fn confirm_email_updating_for_others(
+    app_data: web::Data<AppState>,
+    request: ValidatedJson<ConfirmEmailUpdatingRequest>,
+    path: ValidatedPath<UpdateIdPath>,
+    auth: Auth,
+) -> ApiResult<()> {
+    auth.try_permission("user-email-updating", "confirm")?;
+    confirm_email_updating_impl(app_data, auth, &path.update_id[..], &request.code[..], None).await
+}
+
+async fn resend_email_updating_email_impl(
+    app_data: web::Data<AppState>,
+    update_id: &str,
+    uid: Option<i32>,
+) -> ApiResult<()> {
+    app_data.query.user
+        .resend_email_updating_email(
+            &*app_data.db.read().await, app_data.clone(),
+            &app_data.config.smtp.sender, &app_data.config.site,
+            update_id, uid)
+        .await
+        .map_err(|err| match err {
+            QueryError::UserEmailUpdatingNotFound => ApiError::UserEmailUpdating { reason: "NotFound".into() },
+            QueryError::UserEmailUpdatingExpired => ApiError::UserEmailUpdating { reason: "Expired".into() },
+            QueryError::UserNotMatch => ApiError::PermissionDenied {
+                subject: "user-email-updating".into(),
+                action: "resend".into(),
+            },
+            e => internal_server_error!(e),
+        })?;
+    respond(())
+}
+
 async fn resend_email_updating_email(
     app_data: web::Data<AppState>,
     path: ValidatedPath<UpdateIdPath>,
     auth: Auth,
 ) -> ApiResult<()> {
-    app_data.query.user
-        .resend_email_updating_email(
-            &*app_data.db.read().await, app_data.clone(), &auth,
-            &app_data.config.smtp.sender, &app_data.config.site,
-            &path.update_id[..])
-        .await
-        .map_err(|err| match err {
-            QueryError::UserEmailUpdatingNotFound => ApiError::UserEmailUpdating { reason: "NotFound".into() },
-            QueryError::UserEmailUpdatingExpired => ApiError::UserEmailUpdating { reason: "Expired".into() },
-            QueryError::PermissionDenied { subject, action } => ApiError::PermissionDenied {
-                subject,
-                action,
-            },
-            e => internal_server_error!(e),
-        })?;
-    respond(())
+    auth.try_permission("user-email-updating", "resend-self")?;
+    let uid = auth.claims.as_ref().ok_or_else(|| ApiError::MissingAuthorizationHeader)?.uid;
+    resend_email_updating_email_impl(app_data, &path.update_id[..], Some(uid)).await
+}
+
+async fn resend_email_updating_email_for_others(
+    app_data: web::Data<AppState>,
+    path: ValidatedPath<UpdateIdPath>,
+    auth: Auth,
+) -> ApiResult<()> {
+    auth.try_permission("user-email-updating", "resend")?;
+    resend_email_updating_email_impl(app_data, &path.update_id[..], None).await
 }
 
 async fn update_password_impl(
@@ -971,6 +1032,8 @@ pub fn users_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::Servic
             web::scope("registrations")
                 .app_data(state.clone())
                 .app_data(default_json_config())
+                .app_data(default_path_config())
+                .app_data(default_query_config())
                 .route("/{reg_id}/confirm", web::post().to(confirm_registration))
                 .route("/{reg_id}/resend", web::post().to(resend_registration_email))
                 .route("/{reg_id}", web::get().to(query_registration))
@@ -979,20 +1042,35 @@ pub fn users_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::Servic
             web::scope("email-updating")
                 .app_data(state.clone())
                 .app_data(default_json_config())
+                .app_data(default_path_config())
+                .app_data(default_query_config())
                 .route("/{update_id}/confirm", web::post().to(confirm_email_updating))
                 .route("/{update_id}/resend", web::post().to(resend_email_updating_email))
                 .route("/{update_id}", web::get().to(query_email_updating))
                 .route("", web::post().to(update_user_email))
         ).service(
+            web::scope("email-updating-others")
+                .app_data(state.clone())
+                .app_data(default_json_config())
+                .app_data(default_path_config())
+                .app_data(default_query_config())
+                .route("/{update_id}/confirm", web::post().to(confirm_email_updating_for_others))
+                .route("/{update_id}/resend", web::post().to(resend_email_updating_email_for_others))
+                .route("/{update_id}", web::get().to(query_email_updating_for_others))
+        ).service(
             web::scope("users")
                 .app_data(state.clone())
                 .app_data(default_json_config())
+                .app_data(default_path_config())
+                .app_data(default_query_config())
                 .route("/check-username-existence", web::get().to(check_username_existence))
                 .route("/check-email-existence", web::get().to(check_email_existence))
                 .service(
                     web::scope("/me/avatar")
                         .app_data(state.clone())
+                        .app_data(default_json_config())
                         .app_data(default_path_config())
+                        .app_data(default_query_config())
                         .app_data(avatar_multer_config())
                         .route("", web::post().to(upload_avatar_for_me))
                         .route("", web::delete().to(delete_avatar_for_me))
@@ -1004,6 +1082,9 @@ pub fn users_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::Servic
                 .service(
                     web::scope("/{uid}/avatar")
                         .app_data(state)
+                        .app_data(default_json_config())
+                        .app_data(default_path_config())
+                        .app_data(default_query_config())
                         .app_data(default_path_config())
                         .app_data(avatar_multer_config())
                         .route("", web::post().to(upload_avatar))

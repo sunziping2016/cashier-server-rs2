@@ -3,9 +3,11 @@ use actix_web::{
     error::ResponseError,
     HttpResponse,
 };
+use cashier_query::generator::Error as QueryError;
 use err_derive::Error;
 use serde::{Serialize};
 use validator::{ValidationErrors, ValidationErrorsKind};
+use crate::api::cursor::CursorError;
 
 #[derive(Debug, Serialize, Clone)]
 pub struct ValidationError {
@@ -73,16 +75,20 @@ pub enum ApiError {
     },
     #[error(display = "cannot find the user")]
     UserNotFound,
-    #[error(display = "user registration {}", reason)]
+    #[error(display = "{}", reason)]
     UserRegistration {
         reason: String,
     },
-    #[error(display = "user email updating {}", reason)]
+    #[error(display = "{}", reason)]
     UserEmailUpdating {
         reason: String,
     },
     #[error(display = "cannot find the token")]
     TokenNotFound,
+    #[error(display = "{}", error)]
+    QueryError {
+        error: String,
+    },
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -154,6 +160,22 @@ impl From<ValidationErrors> for ApiError {
     }
 }
 
+impl From<QueryError> for ApiError {
+    fn from(err: QueryError) -> Self {
+        ApiError::QueryError {
+            error: format!("{}", err),
+        }
+    }
+}
+
+impl From<CursorError> for ApiError {
+    fn from(_err: CursorError) -> Self {
+        ApiError::QueryError {
+            error: "invalid cursor".into(),
+        }
+    }
+}
+
 #[macro_export]
 macro_rules! internal_server_error {
     () => {
@@ -203,7 +225,8 @@ impl From<ApiError> for ApiErrorWrapper {
             | ApiError::MissingAuthorizationHeader
             | ApiError::AvatarError{ .. }
             | ApiError::UserRegistration { .. }
-            | ApiError:: UserEmailUpdating { .. } => 400,
+            | ApiError:: UserEmailUpdating { .. }
+            | ApiError::QueryError { .. } => 400,
             ApiError::DuplicatedUser { .. } => 409,
             ApiError::UserNotFound
             | ApiError::TokenNotFound => 404,
@@ -237,7 +260,8 @@ impl ResponseError for ApiError {
             | ApiError::MissingAuthorizationHeader
             | ApiError::AvatarError { .. }
             | ApiError::UserRegistration { .. }
-            | ApiError::UserEmailUpdating { .. } =>
+            | ApiError::UserEmailUpdating { .. }
+            | ApiError::QueryError { .. } =>
                 HttpResponse::BadRequest().json(ApiErrorWrapper::from(self.clone())),
             ApiError::DuplicatedUser { .. } =>
                 HttpResponse::Conflict().json(ApiErrorWrapper::from(self.clone())),

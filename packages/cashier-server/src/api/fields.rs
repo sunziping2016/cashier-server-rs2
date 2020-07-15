@@ -10,6 +10,7 @@ lazy_static! {
     pub static ref USERNAME_REGEX: Regex = Regex::new(r"(?i)^[a-z\d_-]*$").unwrap();
     pub static ref PASSWORD_REGEX: Regex = Regex::new(r"^[^\s]*$").unwrap();
     pub static ref ROLE_REGEX: Regex = Regex::new(r"(?i)^[a-z\d_-]*$").unwrap();
+    pub static ref BASE64_REGEX: Regex = Regex::new("^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$").unwrap();
 }
 
 #[derive(Debug, Validate, Serialize, Deserialize, Deref, AsRef, From, Into, Clone)]
@@ -86,4 +87,24 @@ pub struct PopulateRole {
 #[serde(transparent)]
 pub struct PopulatePermission {
     level: PermissionAccessLevel,
+}
+
+#[derive(Debug, Validate, Serialize, Deserialize, Deref, AsRef, From, Into, Clone)]
+#[serde(transparent)]
+pub struct PaginationSize {
+    #[validate(range(max=50, message = "should be less or equal than 50"))]
+    inner: usize,
+}
+
+impl Default for PaginationSize {
+    fn default() -> Self {
+        PaginationSize { inner: 10 }
+    }
+}
+
+#[derive(Debug, Validate, Serialize, Deserialize, Deref, AsRef, From, Into, Clone)]
+#[serde(transparent)]
+pub struct Cursor {
+    #[validate(regex(path = "BASE64_REGEX", message = "invalid cursor"))]
+    inner: String,
 }
