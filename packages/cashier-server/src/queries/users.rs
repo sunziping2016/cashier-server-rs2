@@ -158,21 +158,6 @@ impl From<(UserWithoutRoles, Vec<i32>)> for UserAll {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(tag = "populate-user")]
-#[serde(rename_all = "kebab-case")]
-pub enum UserAccessLevel {
-    Public,
-    WithoutRoles,
-    All,
-}
-
-impl Default for UserAccessLevel {
-    fn default() -> Self {
-        UserAccessLevel::Public
-    }
-}
-
 #[derive(From, Serialize, Deserialize, Debug)]
 #[serde(tag = "access")]
 #[serde(rename_all = "kebab-case")]
@@ -291,16 +276,6 @@ impl From<(RoleWithoutPermissions, Vec<i32>)> for RoleAll {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(tag = "populate-role")]
-#[serde(rename_all = "kebab-case")]
-pub enum RoleAccessLevel {
-    Short,
-    ShortWithPermissions,
-    WithoutPermissions,
-    All,
-}
-
 #[derive(From, Serialize, Deserialize, Debug)]
 #[serde(tag = "access")]
 #[serde(rename_all = "kebab-case")]
@@ -362,14 +337,6 @@ impl From<&Row> for PermissionAll {
             updated_at: x.get("updated_at"),
         }
     }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(tag = "populate-permission")]
-#[serde(rename_all = "kebab-case")]
-pub enum PermissionAccessLevel {
-    Short,
-    All,
 }
 
 #[derive(From, Serialize, Deserialize, Debug)]
@@ -505,15 +472,9 @@ pub struct Query {
     insert_one_roles: Statement,
     fetch_avatars: Statement,
     update_avatars: Statement,
-    find_one: Statement,
+    find_one_all: Statement,
     find_one_public: Statement,
     find_one_to_username: Statement,
-    find_roles_only_id: Statement,
-    find_roles_short: Statement,
-    find_roles_without_permissions: Statement,
-    find_permissions_only_id: Statement,
-    find_permissions_short: Statement,
-    find_permissions_all: Statement,
     fetch_permission_tree: Statement,
     fetch_default_permission_tree: Statement,
     insert_one_into_user_registration: Statement,
@@ -618,10 +579,12 @@ impl Query {
                 RETURNING updated_at",
             &[Type::TEXT, Type::TEXT, Type::INT4]
         ).await.unwrap();
-        let find_one = client.prepare_typed(
-            "SELECT id, username, email, nickname, avatar, avatar128, \
-                        blocked, created_at, updated_at FROM \"user\" \
-                WHERE id = $1 AND NOT deleted LIMIT 1",
+        let find_one_all = client.prepare_typed(
+            "SELECT \"user\".id, role.id as role, username, email, nickname, avatar, avatar128, \
+                        blocked, \"user\".created_at, \"user\".updated_at \
+                FROM \"user\", user_role, role \
+                WHERE \"user\".id = $1 AND NOT role.deleted AND \"user\".id = user_role.user \
+                    AND role.id = user_role.role AND NOT role.deleted",
             &[Type::INT4],
         ).await.unwrap();
         let find_one_public = client.prepare_typed(
@@ -633,46 +596,6 @@ impl Query {
             "SELECT username FROM \"user\" \
                 WHERE id = $1 AND NOT deleted LIMIT 1",
             &[Type::INT4],
-        ).await.unwrap();
-        let find_roles_only_id = client.prepare_typed(
-            "SELECT DISTINCT \"user_id\", id \
-                    FROM (SELECT UNNEST($1) AS user_id) AS temp, user_role, role \
-                WHERE user_id = user_role.user AND role.id = user_role.role AND NOT role.deleted",
-            &[Type::INT4_ARRAY],
-        ).await.unwrap();
-        let find_roles_short = client.prepare_typed(
-            "SELECT DISTINCT \"user_id\", id, name \
-                    FROM (SELECT UNNEST($1) AS user_id) AS temp, user_role, role \
-                WHERE user_id = user_role.user AND role.id = user_role.role AND NOT role.deleted",
-            &[Type::INT4_ARRAY],
-        ).await.unwrap();
-        let find_roles_without_permissions = client.prepare_typed(
-            "SELECT DISTINCT \"user_id\", id, name, display_name, description, created_at, updated_at \
-                    FROM (SELECT UNNEST($1) AS user_id) AS temp, user_role, role \
-                WHERE user_id = user_role.user AND role.id = user_role.role AND NOT role.deleted",
-            &[Type::INT4_ARRAY],
-        ).await.unwrap();
-        let find_permissions_only_id = client.prepare_typed(
-            "SELECT DISTINCT role_id, id \
-                    FROM (SELECT UNNEST($1) as role_id) as temp, role_permission, permission \
-                WHERE role_id = role_permission.role AND permission.id = role_permission.permission \
-                    AND NOT permission.deleted",
-            &[Type::INT4_ARRAY],
-        ).await.unwrap();
-        let find_permissions_short = client.prepare_typed(
-            "SELECT DISTINCT role_id, id, subject, action \
-                    FROM (SELECT UNNEST($1) as role_id) as temp, role_permission, permission \
-                WHERE role_id = role_permission.role AND permission.id = role_permission.permission \
-                    AND NOT permission.deleted",
-            &[Type::INT4_ARRAY],
-        ).await.unwrap();
-        let find_permissions_all = client.prepare_typed(
-            "SELECT DISTINCT role_id, id, subject, action, display_name, description, \
-                        created_at, updated_at \
-                    FROM (SELECT UNNEST($1) as role_id) as temp, role_permission, permission \
-                WHERE role_id = role_permission.role AND permission.id = role_permission.permission \
-                    AND NOT permission.deleted",
-            &[Type::INT4_ARRAY],
         ).await.unwrap();
         let fetch_permission_tree = client.prepare_typed(
             "SELECT DISTINCT role.id as role_id, permission.id as permission_id, subject, action from ( \
@@ -804,15 +727,9 @@ impl Query {
             insert_one_roles,
             fetch_avatars,
             update_avatars,
-            find_one,
+            find_one_all,
             find_one_public,
             find_one_to_username,
-            find_roles_only_id,
-            find_roles_short,
-            find_roles_without_permissions,
-            find_permissions_only_id,
-            find_permissions_short,
-            find_permissions_all,
             fetch_permission_tree,
             fetch_default_permission_tree,
             insert_one_into_user_registration,
@@ -1005,122 +922,29 @@ impl Query {
             .ok_or_else(|| Error::UserNotFound)?;
         Ok(row.get("updated_at"))
     }
-    pub async fn find_one_with_permissions_and_roles(
-        &self, client: &mut Client, uid: i32,
-        user_access_level: UserAccessLevel,
-        role_access_level: Option<RoleAccessLevel>,
-        permission_access_level: Option<PermissionAccessLevel>,
-    ) -> Result<(User, Vec<Role>, Vec<Permission>)> {
-        let transaction = client.build_transaction()
-            .isolation_level(IsolationLevel::RepeatableRead)
-            .start()
+    pub async fn find_one_all(
+        &self, client: &Client, uid: i32,
+    ) -> Result<UserAll> {
+        let rows = client
+            .query(&self.find_one_all, &[&uid])
             .await?;
-        let rows = match user_access_level {
-            UserAccessLevel::Public => transaction
-                .query(&self.find_one_public, &[&uid])
-                .await?,
-            UserAccessLevel::WithoutRoles | UserAccessLevel::All => transaction
-                .query(&self.find_one, &[&uid])
-                .await?,
-        };
         let row = rows
             .get(0)
             .ok_or_else(|| Error::UserNotFound)?;
-        let mut user: User = match user_access_level {
-            UserAccessLevel::Public => UserPublic::from(row).into(),
-            UserAccessLevel::WithoutRoles | UserAccessLevel::All =>
-                UserWithoutRoles::from(row).into(),
-        };
-        let add_user_roles = match user_access_level {
-            UserAccessLevel::All => true,
-            _ => false,
-        };
-        let mut roles: Vec<Role> = Vec::new();
-        let mut user2role: HashMap<i32, Vec<i32>> = HashMap::new();
-        if add_user_roles || role_access_level.is_some() || permission_access_level.is_some() {
-            match role_access_level {
-                Some(RoleAccessLevel::Short) | Some(RoleAccessLevel::ShortWithPermissions) =>
-                    for row in transaction.query(&self.find_roles_short, &[&vec![uid]]).await? {
-                        let id = row.get("id");
-                        roles.push(RoleShort::from(&row).into());
-                        user2role.entry(row.get("user_id")).or_insert_with(Vec::new).push(id);
-                    }
-                Some(RoleAccessLevel::WithoutPermissions) | Some(RoleAccessLevel::All) =>
-                    for row in transaction.query(&self.find_roles_without_permissions, &[&vec![uid]]).await? {
-                        let id = row.get("id");
-                        roles.push(RoleWithoutPermissions::from(&row).into());
-                        user2role.entry(row.get("user_id")).or_insert_with(Vec::new).push(id);
-                    }
-                None => {
-                    for row in transaction.query(&self.find_roles_only_id, &[&vec![uid]]).await? {
-                        user2role.entry(row.get("user_id")).or_insert_with(Vec::new).push(row.get("id"));
-                    }
-                }
-            }
-        }
-        if add_user_roles {
-            user = match user {
-                User::WithoutRoles(user) => UserAll::from((
-                    user,
-                    user2role.get(&uid).unwrap_or(&Vec::new()).clone()
-                )).into(),
-                _ => unreachable!(),
-            }
-        }
-        let add_role_permissions = match role_access_level {
-            Some(RoleAccessLevel::ShortWithPermissions) | Some(RoleAccessLevel::All) => true,
-            _ => false,
-        };
-        let mut permissions: Vec<Permission> = Vec::new();
-        let mut role2permission: HashMap<i32, Vec<i32>> = HashMap::new();
-        if add_role_permissions || permission_access_level.is_some() {
-            let mut roles_id: Vec<_> =  user2role.values()
-                .flat_map(|x| x.iter().copied())
-                .collect();
-            roles_id.sort();
-            roles_id.dedup();
-            match permission_access_level {
-                Some(PermissionAccessLevel::Short) => {
-                    for row in transaction.query(&self.find_permissions_short, &[&roles_id]).await? {
-                        let id = row.get("id");
-                        permissions.push(PermissionShort::from(&row).into());
-                        role2permission.entry(row.get("role_id")).or_insert_with(Vec::new).push(id);
-                    }
-                }
-                Some(PermissionAccessLevel::All) => {
-                    for row in transaction.query(&self.find_permissions_all, &[&roles_id]).await? {
-                        let id = row.get("id");
-                        permissions.push(PermissionAll::from(&row).into());
-                        role2permission.entry(row.get("role_id")).or_insert_with(Vec::new).push(id);
-                    }
-                }
-                None => {
-                    for row in transaction.query(&self.find_permissions_only_id, &[&roles_id]).await? {
-                        role2permission.entry(row.get("role_id")).or_insert_with(Vec::new).push(row.get("id"));
-                    }
-                }
-            }
-        }
-        if add_role_permissions {
-            roles = roles.into_iter()
-                .map(|role| {
-                    let id = role.get_id();
-                    match role {
-                        Role::Short(role) => RoleShortWithPermissions::from((
-                            role,
-                            role2permission.get(&id).unwrap_or(&Vec::new()).clone()
-                        )).into(),
-                        Role::WithoutPermissions(role) => RoleAll::from((
-                            role,
-                            role2permission.get(&id).unwrap_or(&Vec::new()).clone()
-                        )).into(),
-                        _ => unreachable!(),
-                    }
-                })
-                .collect();
-        }
-        transaction.commit().await?;
-        Ok((user, roles, permissions))
+        Ok(UserAll::from((UserWithoutRoles::from(row), rows.iter()
+            .map(|x| x.get("role"))
+            .collect())))
+    }
+    pub async fn find_one_public(
+        &self, client: &Client, uid: i32,
+    ) -> Result<UserPublic> {
+        let rows = client
+            .query(&self.find_one_public, &[&uid])
+            .await?;
+        let row = rows
+            .get(0)
+            .ok_or_else(|| Error::UserNotFound)?;
+        Ok(UserPublic::from(row))
     }
     pub async fn fetch_permission_tree(
         &self, client: &Client, id: Option<i32>,

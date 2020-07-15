@@ -19,9 +19,6 @@ use crate::{
             RoleName,
             Nickname,
             Id,
-            PopulateUser,
-            PopulateRole,
-            PopulatePermission,
             Any24,
             Any6,
         },
@@ -29,8 +26,8 @@ use crate::{
     queries::{
         errors::Error as QueryError,
         users::{
-            UserAccessLevel, RoleAccessLevel, PermissionAccessLevel,
-            User, Role, Permission, UserRegistrationPublic,
+            User,
+            UserRegistrationPublic,
         },
     },
     websocket::push_messages::{UserCreated, UserUpdated, TokenRevoked, double_option},
@@ -58,6 +55,7 @@ use std::{
 use validator::Validate;
 use validator_derive::Validate;
 use crate::queries::users::UserEmailUpdatingPublic;
+use lazy_static::lazy_static;
 
 #[derive(Debug, Validate, Deserialize)]
 struct CreateUserRequest {
@@ -344,113 +342,71 @@ async fn delete_avatar(
     delete_avatar_impl(app_data, uid, auth).await
 }
 
-#[derive(Deserialize, Validate, Debug)]
-struct ReadUserQuery {
-    #[serde(flatten, default)]
-    populate_user: Option<PopulateUser>,
-    #[serde(flatten, default)]
-    populate_role: Option<PopulateRole>,
-    #[serde(flatten, default)]
-    populate_permission: Option<PopulatePermission>,
-}
-
-struct ReadUserQueryDecoded {
-    populate_user: UserAccessLevel,
-    populate_role: Option<RoleAccessLevel>,
-    populate_permission: Option<PermissionAccessLevel>,
-}
-
-impl From<ReadUserQuery> for ReadUserQueryDecoded {
-    fn from(request: ReadUserQuery) -> Self {
-        Self {
-            populate_user: request.populate_user.clone()
-                .map(UserAccessLevel::from)
-                .unwrap_or(UserAccessLevel::WithoutRoles),
-            populate_role: request.populate_role.clone()
-                .map(RoleAccessLevel::from),
-            populate_permission: request.populate_permission
-                .map(PermissionAccessLevel::from),
-        }
-    }
-}
-
 #[derive(Serialize, Debug)]
 struct ReadUserResponse {
     user: User,
-    roles: Vec<Role>,
-    permissions: Vec<Permission>,
 }
 
 async fn read_user_impl(
     app_data: web::Data<AppState>,
-    request: ReadUserQueryDecoded,
     uid: i32,
 ) -> ApiResult<ReadUserResponse> {
-    let (mut user, roles, permissions) = app_data.query.user
-        .find_one_with_permissions_and_roles(
-            &mut *app_data.db.write().await, uid, request.populate_user,
-            request.populate_role, request.populate_permission,
+    let mut user = User::All(app_data.query.user
+        .find_one_all(
+            &mut *app_data.db.write().await, uid
         )
         .await
         .map_err(|err| match err {
             QueryError::UserNotFound => ApiError::UserNotFound,
             e => internal_server_error!(e),
-        })?;
+        })?);
     let media_url = &app_data.config.media.url;
     user.map_avatars(|x| join_avatar_url(media_url, x));
     respond(ReadUserResponse {
-        user,
-        roles,
-        permissions,
+        user
     })
 }
 
 async fn read_user_for_me(
     app_data: web::Data<AppState>,
-    request: ValidatedQuery<ReadUserQuery>,
     auth: Auth,
 ) -> ApiResult<ReadUserResponse> {
-    let request: ReadUserQueryDecoded = request.into_inner().into();
-    match request.populate_user {
-        UserAccessLevel::All => auth.try_permission("user", "read")?,
-        UserAccessLevel::WithoutRoles | UserAccessLevel::Public =>
-            if !auth.has_permission("user", "read") {
-                auth.try_permission("user", "read-self")?;
-            },
-    }
-    if request.populate_role.is_some() {
-        auth.try_permission("role", "read")?;
-    }
-    if request.populate_permission.is_some() {
-        auth.try_permission("permission", "read")?;
-    }
+    auth.try_permission("user", "read-self")?;
     let uid = auth.claims.ok_or_else(|| ApiError::MissingAuthorizationHeader)?.uid;
-    read_user_impl(app_data, request, uid).await
+    read_user_impl(app_data, uid).await
 }
 
 async fn read_user(
     app_data: web::Data<AppState>,
-    request: ValidatedQuery<ReadUserQuery>,
     uid_path: ValidatedPath<UidPath>,
     auth: Auth,
 ) -> ApiResult<ReadUserResponse> {
-    let request: ReadUserQueryDecoded = request.into_inner().into();
-    match request.populate_user {
-        UserAccessLevel::All | UserAccessLevel::WithoutRoles =>
-            auth.try_permission("user", "read")?,
-        UserAccessLevel::Public =>
-            if !auth.has_permission("user", "read") {
-                auth.try_permission("user-public", "read")?;
-            }
-    }
-    if request.populate_role.is_some() {
-        auth.try_permission("role", "read")?;
-    }
-    if request.populate_permission.is_some() {
-        auth.try_permission("permission", "read")?;
-    }
+    auth.try_permission("user", "read")?;
     let uid = uid_path.uid.clone().into();
-    read_user_impl(app_data, request, uid).await
+    read_user_impl(app_data, uid).await
+}
+
+async fn read_user_public(
+    app_data: web::Data<AppState>,
+    uid_path: ValidatedPath<UidPath>,
+    auth: Auth,
+) -> ApiResult<ReadUserResponse> {
+    auth.try_permission("user-public", "read")?;
+    let uid = uid_path.uid.clone().into();
+    let mut user = User::Public(app_data.query.user
+        .find_one_public(
+            &mut *app_data.db.write().await, uid
+        )
+        .await
+        .map_err(|err| match err {
+            QueryError::UserNotFound => ApiError::UserNotFound,
+            e => internal_server_error!(e),
+        })?);
+    let media_url = &app_data.config.media.url;
+    user.map_avatars(|x| join_avatar_url(media_url, x));
+    respond(ReadUserResponse {
+        user
+    })
 }
 
 #[derive(Debug, Validate, Deserialize)]
@@ -1081,7 +1037,7 @@ pub fn users_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::Servic
                 // .route("/me", web::delete().to(index))
                 .service(
                     web::scope("/{uid}/avatar")
-                        .app_data(state)
+                        .app_data(state.clone())
                         .app_data(default_json_config())
                         .app_data(default_path_config())
                         .app_data(default_query_config())
@@ -1097,6 +1053,13 @@ pub fn users_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::Servic
                 // .route("/{uid}", web::delete().to(index))
                 .route("", web::post().to(create_user))
                 // .route("", web::get().to(index))
+        ).service(
+            web::scope("public-users")
+                .app_data(state.clone())
+                .app_data(default_json_config())
+                .app_data(default_path_config())
+                .app_data(default_query_config())
+                .route("/{uid}", web::get().to(read_user_public))
         );
     })
 }

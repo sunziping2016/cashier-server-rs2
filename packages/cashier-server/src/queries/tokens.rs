@@ -6,6 +6,8 @@ use jsonwebtoken::{
     encode, EncodingKey, Header,
     decode, DecodingKey, Validation,
 };
+use crate::api::cursor::{Result as CursorResult, Cursor, PrimaryCursor};
+use std::borrow::Borrow;
 
 pub struct Query {
     create_token: Statement,
@@ -35,6 +37,42 @@ pub struct Token {
     pub acquire_host: String,
     pub acquire_remote: Option<String>,
     pub acquire_user_agent: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TokenCursor {
+    pub token: Token,
+    pub cursor: String,
+}
+
+impl TokenCursor {
+    pub fn try_from_token(token: Token, sort: &Option<String>) -> CursorResult<Self> {
+        let cursor = Cursor::new(token.id.to_string(), match sort.as_ref().map(String::borrow) {
+            Some(field) => match field {
+                "id" => Some(PrimaryCursor { k: "id".into(), v: Some(token.id.to_string()) }),
+                "user" => Some(PrimaryCursor { k: "user".into(), v: Some(token.user.to_string()) }),
+                "issued_at" => Some(PrimaryCursor { k: "issued_at".into(),
+                    v: Some(token.issued_at.to_rfc3339()) }),
+                "expires_at" => Some(PrimaryCursor { k: "expires_at".into(),
+                    v: Some(token.expires_at.to_rfc3339()) }),
+                "acquire_method" => Some(PrimaryCursor { k: "acquire_method".into(),
+                    v: Some(token.acquire_method.clone()) }),
+                "acquire_host" => Some(PrimaryCursor { k: "acquire_host".into(),
+                    v: Some(token.acquire_host.clone()) }),
+                "acquire_remote" => Some(PrimaryCursor { k: "acquire_remote".into(),
+                    v: token.acquire_remote.clone() }),
+                "acquire_user_agent" => Some(PrimaryCursor { k: "acquire_user_agent".into(),
+                    v: token.acquire_user_agent.clone() }),
+                _ => None
+            },
+            _ => None,
+        });
+        cursor.try_to_str()
+            .map(|cursor| TokenCursor {
+                token,
+                cursor,
+            })
+    }
 }
 
 impl From<&Row> for Token {
