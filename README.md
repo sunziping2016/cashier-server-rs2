@@ -101,6 +101,15 @@ All fields are required.
 |expires_at|Date|last time to update the user|
 |completed|Boolean|`null` for not completed, `false` for rejected, `true` for completed|
 
+### 1.8 Limits
+
+|Key|Type|
+|---|---|
+|subject|TEXT NOT NULL|
+|remote|TEXT NOT NULL|
+|available_tokens|DOUBLE PRECISION NOT NULL|
+|last_time|TIMESTAMP WITH TIME ZONE NOT NULL|
+
 ## 2 TODO
 
 - [x] Multipart

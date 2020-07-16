@@ -10,6 +10,9 @@ use multer::{
     FieldConfig, MulterConfig,
     memory_storage::MemoryStorageBuilder,
 };
+use crate::api::extractors::limit::RateLimit;
+use actix_web::web;
+use crate::api::app_state::AppState;
 
 pub fn default_json_config() -> JsonConfig {
     JsonConfig::default()
@@ -47,4 +50,34 @@ pub fn avatar_multer_config() -> Arc<MulterConfig> {
             )
         )
     )
+}
+
+pub fn default_global_rate_limit(app_data: web::Data<AppState>) -> RateLimit {
+    RateLimit {
+        subject: "global".into(),
+        burst: 20.0,
+        rate: 1.0,
+        reset_on_fail: false,
+        app_data,
+    }
+}
+
+pub fn default_password_rate_limit(app_data: web::Data<AppState>) -> RateLimit {
+    RateLimit {
+        subject: "password".into(),
+        burst: 5.0,
+        rate: 0.05, // 3/min
+        reset_on_fail: false,
+        app_data,
+    }
+}
+
+pub fn default_confirm_rate_limit(app_data: web::Data<AppState>) -> RateLimit {
+    RateLimit {
+        subject: "password".into(),
+        burst: 5.0,
+        rate: 0.05, // 3/min
+        reset_on_fail: false,
+        app_data,
+    }
 }

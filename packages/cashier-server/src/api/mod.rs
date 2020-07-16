@@ -11,6 +11,7 @@ use crate::{
 };
 use actix_web::{web, HttpResponse, Error, HttpRequest};
 use actix_web_actors::ws;
+use crate::api::extractors::config::{default_json_config, default_path_config, default_query_config, default_global_rate_limit};
 
 async fn websocket(
     req: HttpRequest,
@@ -33,6 +34,11 @@ pub fn api_v1(state: &web::Data<app_state::AppState>) -> Box<dyn FnOnce(&mut web
     Box::new(move |cfg| {
         cfg.service(
             web::scope("/api/v1")
+                .wrap(default_global_rate_limit(state.clone()))
+                .app_data(state.clone())
+                .app_data(default_json_config())
+                .app_data(default_path_config())
+                .app_data(default_query_config())
                 .configure(tokens_api)
                 .configure(users_api)
                 .service(

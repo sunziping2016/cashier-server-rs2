@@ -360,6 +360,27 @@ pub async fn init_user_email_updating(client: &Client) -> Result<()> {
     Ok(())
 }
 
+pub async fn drop_limits(client: &Client) -> Result<()> {
+    client
+        .query("DROP TABLE IF EXISTS limits", &[])
+        .await?;
+    Ok(())
+}
+
+pub async fn init_limits(client: &Client) -> Result<()> {
+    client
+        .query("\
+            CREATE TABLE IF NOT EXISTS limits (\
+                subject TEXT NOT NULL,\
+                remote TEXT NOT NULL,\
+                available_tokens DOUBLE PRECISION NOT NULL,\
+                last_time TIMESTAMP WITH TIME ZONE NOT NULL,\
+                PRIMARY KEY (subject, remote)\
+            )", &[])
+        .await?;
+    Ok(())
+}
+
 pub async fn init(config: &InitConfig) -> Result<()> {
     let (client, connection) = tokio_postgres::connect(&config.db, NoTls).await?;
     tokio::spawn(async move {
@@ -369,6 +390,7 @@ pub async fn init(config: &InitConfig) -> Result<()> {
     });
     if config.reset {
         // in reverse order
+        drop_limits(&client).await?;
         drop_user_email_updating(&client).await?;
         drop_user_registration(&client).await?;
         drop_global_settings(&client).await?;
@@ -385,5 +407,6 @@ pub async fn init(config: &InitConfig) -> Result<()> {
     init_global_settings(&client).await?;
     init_user_registration(&client).await?;
     init_user_email_updating(&client).await?;
+    init_limits(&client).await?;
     Ok(())
 }

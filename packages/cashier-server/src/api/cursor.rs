@@ -8,7 +8,7 @@ use tokio_postgres::Row;
 use actix_web::web;
 use crate::api::app_state::AppState;
 use futures::FutureExt;
-use futures::future::LocalBoxFuture;
+use futures::future::{LocalBoxFuture, err};
 
 #[derive(Debug, Error)]
 pub enum CursorError {
@@ -124,9 +124,9 @@ pub fn process_query(
     process: Handler,
 ) -> LocalBoxFuture<'static, ApiResult<Vec<Row>>> {
     if before.is_some() && after.is_some() {
-        return futures::future::ready(Err(ApiError::QueryError {
-            error: "".into(),
-        })).boxed_local();
+        return err(ApiError::QueryError {
+            error: "before and after cannot be both presented".into(),
+        }).boxed_local();
     }
     let direction = if before.is_some() == desc { "ASC" } else { "DESC" };
     let id = generator.check_sortable("id").unwrap();
@@ -136,7 +136,7 @@ pub fn process_query(
                 format!("{} {}, {} {}", result, direction, id, direction),
                 format!("{}, {}", id, result),
             ),
-            Err(e) => return futures::future::ready(Err(e.into())).boxed_local(),
+            Err(e) => return err(e.into()).boxed_local(),
         }
         None => (
             format!("{} {}", id, direction),
@@ -146,18 +146,18 @@ pub fn process_query(
     let mut conditions: Vec<String> = Vec::new();
     match generator.parse_to_postgres(&query) {
         Ok(result) => conditions.push(result),
-        Err(e) => return futures::future::ready(Err(e.into())).boxed_local(),
+        Err(e) => return err(e.into()).boxed_local(),
     }
     if let Some(before) = before.as_ref() {
         match Cursor::convert_to_sql(&before[..], &sort, generator, desc) {
             Ok(result) => conditions.push(result),
-            Err(e) => return futures::future::ready(Err(e.into())).boxed_local(),
+            Err(e) => return err(e.into()).boxed_local(),
         }
     }
     if let Some(after) = after.as_ref() {
         match Cursor::convert_to_sql(&after[..], &sort, generator, !desc) {
             Ok(result) => conditions.push(result),
-            Err(e) => return futures::future::ready(Err(e.into())).boxed_local(),
+            Err(e) => return err(e.into()).boxed_local(),
         }
     }
     let condition = conditions.join(" AND ");

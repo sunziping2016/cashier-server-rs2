@@ -2,11 +2,6 @@ use crate::{
     api::{
         extractors::{
             auth::Auth,
-            config::{
-                default_json_config,
-                default_path_config,
-                default_query_config,
-            },
         },
         errors::{ApiError, ApiResult, respond},
         app_state::AppState,
@@ -40,6 +35,7 @@ use cashier_query::generator::{QueryConfig, FieldConfig};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use crate::api::cursor::{process_query, default_process};
 use crate::queries::tokens::TokenIdUser;
+use crate::api::extractors::config::default_password_rate_limit;
 
 #[derive(Debug, Serialize)]
 struct AcquireTokenResponse {
@@ -390,7 +386,7 @@ async fn revoke_this_token_for_me(
     app_data: web::Data<AppState>,
     auth: Auth,
 ) -> ApiResult<()> {
-    auth.try_permission("token", "revoke-single")?;
+    auth.try_permission("token", "revoke-single-self")?;
     let claims = auth.claims.as_ref().ok_or_else(|| ApiError::MissingAuthorizationHeader)?;
     let jti = claims.jti;
     let uid = claims.uid;
@@ -403,12 +399,16 @@ pub fn tokens_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::Servi
         cfg
             .service(
                 web::scope("tokens")
-                    .app_data(state.clone())
-                    .app_data(default_json_config())
-                    .app_data(default_path_config())
-                    .app_data(default_query_config())
-                    .route("/acquire-by-username", web::post().to(acquire_token_by_username))
-                    .route("/acquire-by-email", web::post().to(acquire_token_by_email))
+                    .service(
+                        web::scope("acquire-by-username")
+                            .wrap(default_password_rate_limit(state.clone()))
+                            .route("", web::post().to(acquire_token_by_username))
+                    )
+                    .service(
+                        web::scope("acquire-by-email")
+                            .wrap(default_password_rate_limit(state.clone()))
+                            .route("", web::post().to(acquire_token_by_email))
+                    )
                     .route("/resume", web::post().to(resume_token))
                     // .route("/{jti}", web::get().to(read_token_by_jti))
                     .route("/{jti}", web::delete().to(revoke_single_token))
@@ -417,10 +417,6 @@ pub fn tokens_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::Servi
             )
             .service(
                 web::scope("my-tokens")
-                    .app_data(state.clone())
-                    .app_data(default_json_config())
-                    .app_data(default_path_config())
-                    .app_data(default_query_config())
                     // .route("/this", web::get().to(read_token_by_jti))
                     .route("/this", web::delete().to(revoke_this_token_for_me))
                     // .route("/{jti}", web::get().to(read_token_for_me_by_jti))

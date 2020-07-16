@@ -62,6 +62,7 @@ use crate::api::fields::PaginationSize;
 use crate::queries::users::{UserCursor, UserAll};
 use crate::api::cursor::process_query;
 use futures::FutureExt;
+use crate::api::extractors::config::default_confirm_rate_limit;
 
 #[derive(Debug, Validate, Deserialize)]
 struct CreateUserRequest {
@@ -1084,39 +1085,31 @@ pub fn users_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::Servic
     Box::new(move |cfg| {
         cfg.service(
             web::scope("registrations")
-                .app_data(state.clone())
-                .app_data(default_json_config())
-                .app_data(default_path_config())
-                .app_data(default_query_config())
-                .route("/{reg_id}/confirm", web::post().to(confirm_registration))
+                .service(
+                    web::scope("/{reg_id}/confirm")
+                        .wrap(default_confirm_rate_limit(state.clone()))
+                        .route("", web::post().to(confirm_registration))
+                )
                 .route("/{reg_id}/resend", web::post().to(resend_registration_email))
                 .route("/{reg_id}", web::get().to(query_registration))
                 .route("", web::post().to(register_user))
         ).service(
             web::scope("email-updating")
-                .app_data(state.clone())
-                .app_data(default_json_config())
-                .app_data(default_path_config())
-                .app_data(default_query_config())
-                .route("/{update_id}/confirm", web::post().to(confirm_email_updating))
+                .service(
+                    web::scope("/{update_id}/confirm")
+                        .wrap(default_confirm_rate_limit(state.clone()))
+                        .route("", web::post().to(confirm_email_updating))
+                )
                 .route("/{update_id}/resend", web::post().to(resend_email_updating_email))
                 .route("/{update_id}", web::get().to(query_email_updating))
                 .route("", web::post().to(update_user_email))
         ).service(
             web::scope("email-updating-others")
-                .app_data(state.clone())
-                .app_data(default_json_config())
-                .app_data(default_path_config())
-                .app_data(default_query_config())
                 .route("/{update_id}/confirm", web::post().to(confirm_email_updating_for_others))
                 .route("/{update_id}/resend", web::post().to(resend_email_updating_email_for_others))
                 .route("/{update_id}", web::get().to(query_email_updating_for_others))
         ).service(
             web::scope("users")
-                .app_data(state.clone())
-                .app_data(default_json_config())
-                .app_data(default_path_config())
-                .app_data(default_query_config())
                 .route("/check-username-existence", web::get().to(check_username_existence))
                 .route("/check-email-existence", web::get().to(check_email_existence))
                 .service(
@@ -1153,10 +1146,6 @@ pub fn users_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::Servic
                 .route("", web::get().to(list_user))
         ).service(
             web::scope("public-users")
-                .app_data(state.clone())
-                .app_data(default_json_config())
-                .app_data(default_path_config())
-                .app_data(default_query_config())
                 .route("/{uid}", web::get().to(read_user_public))
                 // .route("", web::get().to(index))
         );

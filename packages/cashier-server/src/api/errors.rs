@@ -8,6 +8,7 @@ use err_derive::Error;
 use serde::{Serialize};
 use validator::{ValidationErrors, ValidationErrorsKind};
 use crate::api::cursor::CursorError;
+use log::error;
 
 #[derive(Debug, Serialize, Clone)]
 pub struct ValidationError {
@@ -89,6 +90,10 @@ pub enum ApiError {
     QueryError {
         error: String,
     },
+    #[error(display = "too many request on {}", subject)]
+    TooManyRequests {
+        subject: String,
+    }
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -202,7 +207,7 @@ macro_rules! internal_server_error {
 }
 
 #[derive(Debug, Serialize)]
-struct ApiErrorWrapper {
+pub struct ApiErrorWrapper {
     code: u32,
     message: String,
     data: ApiError,
@@ -230,6 +235,7 @@ impl From<ApiError> for ApiErrorWrapper {
             ApiError::DuplicatedUser { .. } => 409,
             ApiError::UserNotFound
             | ApiError::TokenNotFound => 404,
+            ApiError::TooManyRequests { .. } => 429,
         };
         ApiErrorWrapper {
             code,
@@ -244,8 +250,10 @@ impl ResponseError for ApiError {
         match self {
             ApiError::NotImplemented { .. } =>
                 HttpResponse::NotImplemented().json(ApiErrorWrapper::from(self.clone())),
-            ApiError::InternalServerError { .. } =>
-                HttpResponse::InternalServerError().json(ApiErrorWrapper::from(self.clone())),
+            ApiError::InternalServerError { .. } => {
+                error!("{:?}", self);
+                HttpResponse::InternalServerError().json(ApiErrorWrapper::from(self.clone()))
+            }
             ApiError::WrongUserOrPassword
             | ApiError::UserBlocked
             | ApiError::InvalidAuthorizationHeader
@@ -268,6 +276,8 @@ impl ResponseError for ApiError {
             ApiError::UserNotFound
             | ApiError::TokenNotFound =>
                 HttpResponse::NotFound().json(ApiErrorWrapper::from(self.clone())),
+            ApiError::TooManyRequests { .. } =>
+                HttpResponse::TooManyRequests().json(ApiErrorWrapper::from(self.clone())),
         }
     }
 }
