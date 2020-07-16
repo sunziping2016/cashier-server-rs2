@@ -239,25 +239,11 @@ impl QueryConfig {
                             required_operation: "equal".into(),
                         });
                     }
-                    let value = config.escape(value)?;
                     let rename = config.rename.as_ref().unwrap_or(field);
-                    if config.use_like {
-                        let value = value
-                            .replace("^", "^^")
-                            .replace("%", "^%")
-                            .replace("_", "^_");
-                        format!("{} ILIKE '%{}%' ESCAPE '^'", rename, &value[1..value.len() - 1])
-                    } else {
-                        format!("{} = {}", rename, value)
-                    }
-                }
-                None => {
-                    let queries = self.fields.values()
-                        .filter(|x| x.wildcard && x.partial_equal)
-                        .map(|config| {
+                    match value {
+                        Some(value) => {
                             let value = config.escape(value)?;
-                            let rename = config.rename.as_ref().unwrap_or(&config.field);
-                            Ok(if config.use_like {
+                            if config.use_like {
                                 let value = value
                                     .replace("^", "^^")
                                     .replace("%", "^%")
@@ -265,7 +251,31 @@ impl QueryConfig {
                                 format!("{} ILIKE '%{}%' ESCAPE '^'", rename, &value[1..value.len() - 1])
                             } else {
                                 format!("{} = {}", rename, value)
-                            })
+                            }
+                        }
+                        None => format!("{} IS NULL", rename),
+                    }
+                }
+                None => {
+                    let queries = self.fields.values()
+                        .filter(|x| x.wildcard && x.partial_equal)
+                        .map(|config| {
+                            let rename = config.rename.as_ref().unwrap_or(&config.field);
+                            match value {
+                                Some(value) => {
+                                    let value = config.escape(value)?;
+                                    Ok(if config.use_like {
+                                        let value = value
+                                            .replace("^", "^^")
+                                            .replace("%", "^%")
+                                            .replace("_", "^_");
+                                        format!("{} ILIKE '%{}%' ESCAPE '^'", rename, &value[1..value.len() - 1])
+                                    } else {
+                                        format!("{} = {}", rename, value)
+                                    })
+                                }
+                                None => Ok(format!("{} IS NULL", rename)),
+                            }
                         })
                         .flat_map(Result::ok)
                         .collect::<Vec<_>>();

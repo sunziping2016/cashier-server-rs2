@@ -29,7 +29,7 @@ pub enum Query {
     },
     Equal {
         field: Option<String>,
-        value: String,
+        value: Option<String>,
     },
     Order {
         field: Option<String>,
@@ -157,6 +157,15 @@ pub fn parse_literal(input: &str) -> IResult<&str, String> {
     ))(input)
 }
 
+// NullableLiteral = QuotedString | UnquotedLiteral
+pub fn parse_nullable_literal(input: &str) -> IResult<&str, Option<String>> {
+    alt((
+        value(None, parse_quoted_string),
+        map(parse_unquoted_literal, |v| if v.to_ascii_lowercase() == "null" {
+            None } else { Some(v) }),
+    ))(input)
+}
+
 // WildcardLiteral = Literal | '*'
 pub fn parse_wildcard_literal(input: &str) -> IResult<&str, Option<String>> {
     alt((
@@ -208,7 +217,7 @@ pub fn parse_or_list_of_values(input: &str) -> IResult<&str, QueryNeedsField> {
 }
 
 // ListOfValues = '(' Space* OrListOfValues Space* ')'
-//              | Literal
+//              | NullableLiteral
 pub fn parse_list_of_values(input: &str) -> IResult<&str, QueryNeedsField> {
     alt((
         map(preceded(
@@ -218,14 +227,14 @@ pub fn parse_list_of_values(input: &str) -> IResult<&str, QueryNeedsField> {
                 pair(multispace0, tag(")")),
             )
         ), |func| Box::new(|field| func(field))  as QueryNeedsField),
-        map(parse_literal,
+        map(parse_nullable_literal,
             |value| Box::new(|field| Query::Equal {field, value}) as QueryNeedsField),
     ))(input)
 }
 
-// ValueExpression = Literal
+// ValueExpression = NullableLiteral
 pub fn parse_value_expression(input: &str) -> IResult<&str, Query> {
-    map(parse_literal, |value| Query::Equal { field: None, value })(input)
+    map(parse_nullable_literal, |value| Query::Equal { field: None, value })(input)
 }
 
 // FieldValueExpression = WildcardLiteral Space* ':' Space* ListOfValues
