@@ -160,6 +160,23 @@ impl From<(UserWithoutRoles, Vec<i32>)> for UserAll {
     }
 }
 
+impl From<&Row> for UserAll {
+    fn from(row: &Row) -> Self {
+        Self {
+            id: row.get("id"),
+            username: row.get("username"),
+            roles: row.get("roles"),
+            email: row.get("email"),
+            nickname: row.get("nickname"),
+            avatar: row.get("avatar"),
+            avatar128: row.get("avatar128"),
+            blocked: row.get("blocked"),
+            created_at: row.get("created_at"),
+            updated_at: row.get("updated_at"),
+        }
+    }
+}
+
 #[derive(From, Serialize, Deserialize, Debug)]
 #[serde(tag = "access")]
 #[serde(rename_all = "kebab-case")]
@@ -261,7 +278,7 @@ impl UserCursor {
                     k: "blocked".into(),
                     v: blocked.clone().as_ref().map(bool::to_string) }),
                 "created_at" => Some(PrimaryCursor {
-                    k: "create_at".into(),
+                    k: "created_at".into(),
                     v: Some(user.created_at().to_rfc3339()) }),
                 "updated_at" => user.updated_at().map(|updated_at| PrimaryCursor {
                     k: "updated_at".into(),
@@ -564,7 +581,7 @@ pub struct Query {
     insert_one_roles: Statement,
     fetch_avatars: Statement,
     update_avatars: Statement,
-    find_without_roles: Statement,
+    find_one_with_roles: Statement,
     find_roles_from_user_to_id: Statement,
     find_one_public: Statement,
     find_one_to_username: Statement,
@@ -672,12 +689,14 @@ impl Query {
                 RETURNING updated_at",
             &[Type::TEXT, Type::TEXT, Type::INT4]
         ).await.unwrap();
-        let find_without_roles = client.prepare_typed(
+        let find_one_with_roles = client.prepare_typed(
             "SELECT \"user\".id, username, email, nickname, avatar, avatar128, \
-                        blocked, \"user\".created_at, \"user\".updated_at \
-                FROM (SELECT UNNEST($1) AS uid) AS temp, \"user\" \
-                WHERE \"user\".id = uid AND NOT deleted",
-            &[Type::INT4_ARRAY],
+                     blocked, \"user\".created_at, \"user\".updated_at, ARRAY_AGG(role.id) as roles \
+            FROM \"user\", user_role, role \
+            WHERE \"user\".id = $1 AND NOT \"user\".deleted AND user_role.user = \"user\".id \
+                AND user_role.role = role.id AND NOT role.deleted \
+            GROUP BY \"user\".id",
+            &[Type::INT4],
         ).await.unwrap();
         let find_roles_from_user_to_id = client.prepare_typed(
             "SELECT user_role.user, user_role.role \
@@ -825,7 +844,7 @@ impl Query {
             insert_one_roles,
             fetch_avatars,
             update_avatars,
-            find_without_roles,
+            find_one_with_roles,
             find_roles_from_user_to_id,
             find_one_public,
             find_one_to_username,
@@ -1025,18 +1044,12 @@ impl Query {
         &self, client: &Client, uid: i32,
     ) -> Result<UserAll> {
         let rows = client
-            .query(&self.find_without_roles, &[&vec![uid]])
+            .query(&self.find_one_with_roles, &[&uid])
             .await?;
         let row = rows
             .get(0)
             .ok_or_else(|| Error::UserNotFound)?;
-        let user = UserWithoutRoles::from(row);
-        let rows = client
-            .query(&self.find_roles_from_user_to_id, &[&vec![uid]])
-            .await?;
-        Ok(UserAll::from((user, rows.iter()
-            .map(|x| x.get("role"))
-            .collect())))
+        Ok(UserAll::from(row))
     }
     pub async fn add_roles(
         &self, client: &Client, users_without_roles: Vec<UserWithoutRoles>,

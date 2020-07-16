@@ -38,7 +38,7 @@ use validator::Validate;
 use validator_derive::Validate;
 use cashier_query::generator::{QueryConfig, FieldConfig};
 use chrono::{DateTime, NaiveDateTime, Utc};
-use crate::api::cursor::process_query;
+use crate::api::cursor::{process_query, default_process};
 use crate::queries::tokens::TokenIdUser;
 
 #[derive(Debug, Serialize)]
@@ -222,13 +222,15 @@ async fn list_token_for_me(
 ) -> ApiResult<ListTokenResponse> {
     auth.try_permission("token", "list-self")?;
     let uid = auth.claims.as_ref().ok_or_else(|| ApiError::MissingAuthorizationHeader)?.uid;
-    let results = process_query(&LIST_TOKEN_FOR_ME_GENERATOR,
-                                &request.before, &request.after, &request.size,
-                                &request.sort, request.desc, &request.query,
-                                vec!["NOT revoked".into(), format!("\"user\" = {}", uid)],
-                                "id, \"user\", issued_at, expires_at, acquire_method, \
-                                    acquire_host, acquire_remote, acquire_user_agent",
-                                "token", app_data).await?.iter()
+    let results = process_query(
+        &LIST_TOKEN_FOR_ME_GENERATOR, &request.before, &request.after, &request.sort,
+        request.desc, &request.query,
+        default_process(
+            &format!("NOT REVOKED AND \"user\" = {}", uid),
+            "id, \"user\", issued_at, expires_at, acquire_method, \
+                acquire_host, acquire_remote, acquire_user_agent",
+            "token", &request.size, app_data.clone())
+    ).await?.iter()
         .map(|row| {
             TokenCursor::try_from_token(Token::from(row), &request.sort)
         })
@@ -242,13 +244,15 @@ async fn list_token(
     auth: Auth,
 ) -> ApiResult<ListTokenResponse> {
     auth.try_permission("token", "list")?;
-    let results = process_query(&LIST_TOKEN_GENERATOR,
-                                &request.before, &request.after, &request.size,
-                                &request.sort, request.desc, &request.query,
-                                vec!["NOT revoked".into()],
-                                "id, \"user\", issued_at, expires_at, acquire_method, \
-                                    acquire_host, acquire_remote, acquire_user_agent",
-                                "token", app_data).await?.iter()
+    let results = process_query(
+        &LIST_TOKEN_GENERATOR, &request.before, &request.after, &request.sort,
+        request.desc, &request.query,
+        default_process(
+            "NOT REVOKED",
+            "id, \"user\", issued_at, expires_at, acquire_method, \
+                acquire_host, acquire_remote, acquire_user_agent",
+            "token", &request.size, app_data.clone())
+    ).await?.iter()
         .map(|row| {
             TokenCursor::try_from_token(Token::from(row), &request.sort)
         })

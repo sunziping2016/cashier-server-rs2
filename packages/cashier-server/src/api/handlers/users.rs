@@ -59,8 +59,9 @@ use validator_derive::Validate;
 use cashier_query::generator::{QueryConfig, FieldConfig, escape_unquoted};
 use lazy_static::lazy_static;
 use crate::api::fields::PaginationSize;
-use crate::queries::users::{UserCursor, UserWithoutRoles};
+use crate::queries::users::{UserCursor, UserAll};
 use crate::api::cursor::process_query;
+use futures::FutureExt;
 
 #[derive(Debug, Validate, Deserialize)]
 struct CreateUserRequest {
@@ -984,13 +985,19 @@ async fn update_password(
 
 lazy_static! {
     static ref LIST_USER_GENERATOR: QueryConfig = QueryConfig::new()
-        .field(FieldConfig::new_number_field::<i32>("id", None))
+        .field(FieldConfig::new_number_field::<i32>("id", Some("\"user\".id".into())))
         .field(FieldConfig::new_string_field("username", None))
         .field(FieldConfig::new_string_field("email", None))
         .field(FieldConfig::new_string_field("nickname", None))
+        .field(FieldConfig::new("avatar")
+            .partial_equal()
+            .use_like())
+        .field(FieldConfig::new("avatar128")
+            .partial_equal()
+            .use_like())
         .field(FieldConfig::new_number_field::<bool>("blocked", None))
-        .field(FieldConfig::new_date_time_field("created_at", None))
-        .field(FieldConfig::new_date_time_field("updated_at", None))
+        .field(FieldConfig::new_date_time_field("created_at", Some("\"user\".created_at".into())))
+        .field(FieldConfig::new_date_time_field("updated_at", Some("\"user\".updated_at".into())))
         .field(FieldConfig::new("role")
             .partial_equal()
             .escape_handler(escape_unquoted::<i32>()));
@@ -1023,20 +1030,45 @@ async fn list_user(
     auth: Auth,
 ) -> ApiResult<ListUserResponse> {
     auth.try_permission("user", "list")?;
-    let users = process_query(&LIST_USER_GENERATOR,
-                              &request.before, &request.after, &request.size,
-                              &request.sort, request.desc, &request.query,
-                              vec!["(NOT \"user\".deleted AND user_role.user = \"user\".id AND \
-                                  user_role.role = role.id AND NOT role.deleted)".into()],
-                              "\"user\".id, username, email, nickname, avatar, avatar128, \
-                                  blocked, \"user\".created_at, \"user\".updated_at",
-                              "\"user\", user_role, role", app_data.clone()).await?.iter()
-        .map(UserWithoutRoles::from)
+    // let users = process_query(&LIST_USER_GENERATOR,
+    //                           &request.before, &request.after, &request.size,
+    //                           &request.sort, request.desc, &request.query,
+    //                           vec!["(NOT \"user\".deleted AND user_role.user = \"user\".id AND \
+    //                               user_role.role = role.id AND NOT role.deleted)".into()],
+    //                           "\"user\".id, username, email, nickname, avatar, avatar128, \
+    //                               blocked, \"user\".created_at, \"user\".updated_at, \
+    //                               ARRAY_AGG(role.id) as roles",
+    //                           "\"user\", user_role, role",
+    //                           Some("\"user\".id"),
+    //                           app_data.clone()).await?.iter()
+    //     .map(UserAll::from)
+    //     .collect::<Vec<_>>();
+    let size = usize::from(request.size.clone());
+    let users = process_query(
+        &LIST_USER_GENERATOR, &request.before, &request.after, &request.sort,
+        request.desc, &request.query,
+        Box::new(move |condition, order_by, ordered_columns| async move {
+            let statement = format!(
+            "SELECT \"user\".id, username, email, nickname, avatar, avatar128, \
+                     blocked, \"user\".created_at, \"user\".updated_at, ARRAY_AGG(role.id) as roles \
+            FROM ( \
+                SELECT DISTINCT {} FROM \"user\", user_role, role \
+                WHERE {} AND (NOT \"user\".deleted AND user_role.user = \"user\".id AND \
+                    user_role.role = role.id AND NOT role.deleted) \
+                ORDER BY {} LIMIT {} \
+            ) AS temp, \"user\", user_role, role \
+            WHERE \"user\".id = temp.id AND NOT \"user\".deleted AND user_role.user = \"user\".id \
+                AND user_role.role = role.id AND NOT role.deleted \
+            GROUP BY \"user\".id \
+            ORDER BY {}", ordered_columns, condition, order_by, size, order_by);
+            Ok(app_data.db.read().await
+                .query(&statement[..], &[])
+                .await
+                .map_err(|e| internal_server_error!(e))?)
+        }.boxed_local())
+    ).await?.iter()
+        .map(UserAll::from)
         .collect::<Vec<_>>();
-    let users = app_data.query.user
-        .add_roles(&*app_data.db.read().await, users)
-        .await
-        .map_err(|e| internal_server_error!(e))?;
     let results = users.into_iter()
         .map(|user| { UserCursor::try_from_user(User::All(user), &request.sort) })
         .collect::<Result<Vec<_>, _>>()?;

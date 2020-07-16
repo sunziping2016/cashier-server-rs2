@@ -7,6 +7,8 @@ use crate::internal_server_error;
 use tokio_postgres::Row;
 use actix_web::web;
 use crate::api::app_state::AppState;
+use futures::FutureExt;
+use futures::future::LocalBoxFuture;
 
 #[derive(Debug, Error)]
 pub enum CursorError {
@@ -41,8 +43,10 @@ impl Cursor {
     pub fn new(id: String, p: Option<PrimaryCursor>) -> Self {
         Self { p, id }
     }
+    pub fn convert_to_sql(input: &str, key: &Option<String>, config: &QueryConfig, gt: bool) -> Result<String> {
+        Ok(Cursor::try_from_str(input, key)?.to_sql(config, gt)?)
+    }
     pub fn try_from_str(input: &str, key: &Option<String>) -> Result<Cursor> {
-        println!("{}", input);
         let cursor: Self = serde_json::from_slice(&base64::decode(input)?)?;
         if cursor.p.as_ref().map(|x| x.k.clone()) != *key {
             return Err(CursorError::InvalidKey);
@@ -86,47 +90,84 @@ impl Cursor {
     }
 }
 
-pub async fn process_query(
+pub type Handler = Box<dyn FnOnce(String/*condition*/, String/*order_by*/, String/*ordered_columns*/)
+    -> LocalBoxFuture<'static, ApiResult<Vec<Row>>>>;
+
+pub fn default_process(
+    extra_condition: &str,
+    projection: &str,
+    table: &str,
+    size: &PaginationSize,
+    app_data: web::Data<AppState>,
+) -> Handler {
+    let extra_condition = extra_condition.to_owned();
+    let projection = projection.to_owned();
+    let table = table.to_owned();
+    let size = usize::from(size.clone());
+    Box::new(move |condition, order_by, _| async move {
+        let statement = format!("SELECT {} FROM {} WHERE {} AND ({}) ORDER BY {} LIMIT {}",
+                                projection, table, condition, extra_condition, order_by, size);
+        Ok(app_data.db.read().await
+            .query(&statement[..], &[])
+            .await
+            .map_err(|e| internal_server_error!(e))?)
+    }.boxed_local())
+}
+
+pub fn process_query(
     generator: &QueryConfig,
     before: &Option<CursorField>,
     after: &Option<CursorField>,
-    size: &PaginationSize,
     sort: &Option<String>,
     desc: bool,
     query: &str,
-    mut conditions: Vec<String>,
-    projection: &str,
-    table: &str,
-    app_data: web::Data<AppState>,
-) -> ApiResult<Vec<Row>> {
+    process: Handler,
+) -> LocalBoxFuture<'static, ApiResult<Vec<Row>>> {
     if before.is_some() && after.is_some() {
-        return Err(ApiError::QueryError {
+        return futures::future::ready(Err(ApiError::QueryError {
             error: "".into(),
-        });
+        })).boxed_local();
     }
     let direction = if before.is_some() == desc { "ASC" } else { "DESC" };
-    let order_by = match sort.as_ref() {
-        Some(sort) => format!("{} {}, id {}",
-                              generator.check_sortable(sort)?,
-                              direction, direction),
-        None => format!("id {}", direction),
+    let id = generator.check_sortable("id").unwrap();
+    let (order_by, ordered_columns) = match sort.as_ref() {
+        Some(sort) => match generator.check_sortable(sort) {
+            Ok(result) => (
+                format!("{} {}, {} {}", result, direction, id, direction),
+                format!("{}, {}", id, result),
+            ),
+            Err(e) => return futures::future::ready(Err(e.into())).boxed_local(),
+        }
+        None => (
+            format!("{} {}", id, direction),
+            format!("{}", id),
+        )
     };
-    conditions.push(generator.parse_to_postgres(&query)?);
+    let mut conditions: Vec<String> = Vec::new();
+    match generator.parse_to_postgres(&query) {
+        Ok(result) => conditions.push(result),
+        Err(e) => return futures::future::ready(Err(e.into())).boxed_local(),
+    }
     if let Some(before) = before.as_ref() {
-        conditions.push(Cursor::try_from_str(&before[..], &sort)?.to_sql(generator, desc)?)
+        match Cursor::convert_to_sql(&before[..], &sort, generator, desc) {
+            Ok(result) => conditions.push(result),
+            Err(e) => return futures::future::ready(Err(e.into())).boxed_local(),
+        }
     }
     if let Some(after) = after.as_ref() {
-        conditions.push(Cursor::try_from_str(&after[..], &sort)?.to_sql(generator, !desc)?)
+        match Cursor::convert_to_sql(&after[..], &sort, generator, !desc) {
+            Ok(result) => conditions.push(result),
+            Err(e) => return futures::future::ready(Err(e.into())).boxed_local(),
+        }
     }
     let condition = conditions.join(" AND ");
-    let statement = format!("SELECT DISTINCT {} FROM {} WHERE {} ORDER BY {} LIMIT {}",
-                            projection, table, condition, order_by, usize::from(size.clone()));
-    let mut rows = app_data.db.read().await
-        .query(&statement[..], &[])
-        .await
-        .map_err(|e| internal_server_error!(e))?;
-    if before.is_some() {
-        rows.reverse();
-    }
-    Ok(rows)
+    let has_before = before.is_some();
+    process(condition, order_by, ordered_columns)
+        .map(move |results| results.map(|mut rows| {
+            if has_before {
+                rows.reverse();
+            }
+            rows
+        }))
+        .boxed_local()
 }
