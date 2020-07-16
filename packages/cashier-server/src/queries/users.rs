@@ -14,6 +14,8 @@ use tokio_postgres::{
     IsolationLevel, Row,
 };
 use crate::api::app_state::AppState;
+use crate::api::cursor::{Result as CursorResult, Cursor, PrimaryCursor};
+use std::borrow::Borrow;
 
 struct Digit;
 
@@ -183,6 +185,96 @@ impl User {
                 user.avatar128 = user.avatar128.as_ref().map(&mapping);
             }
         }
+    }
+    pub fn id(&self) -> i32 {
+        match self {
+            User::Public(user) => user.id,
+            User::WithoutRoles(user) => user.id,
+            User::All(user) => user.id,
+        }
+    }
+    pub fn username(&self) -> &String {
+        match self {
+            User::Public(user) => &user.username,
+            User::WithoutRoles(user) => &user.username,
+            User::All(user) => &user.username,
+        }
+    }
+    pub fn email(&self) -> Option<&Option<String>> {
+        match self {
+            User::Public(_) => None,
+            User::WithoutRoles(user) => Some(&user.email),
+            User::All(user) => Some(&user.email),
+        }
+    }
+    pub fn nickname(&self) -> &Option<String> {
+        match self {
+            User::Public(user) => &user.nickname,
+            User::WithoutRoles(user) => &user.nickname,
+            User::All(user) => &user.nickname,
+        }
+    }
+    pub fn blocked(&self) -> Option<&Option<bool>> {
+        match self {
+            User::Public(_) => None,
+            User::WithoutRoles(user) => Some(&user.blocked),
+            User::All(user) => Some(&user.blocked),
+        }
+    }
+    pub fn created_at(&self) -> &DateTime<Utc> {
+        match self {
+            User::Public(user) => &user.created_at,
+            User::WithoutRoles(user) => &user.created_at,
+            User::All(user) => &user.created_at,
+        }
+    }
+    pub fn updated_at(&self) -> Option<&DateTime<Utc>> {
+        match self {
+            User::Public(_) => None,
+            User::WithoutRoles(user) => Some(&user.created_at),
+            User::All(user) => Some(&user.created_at),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct UserCursor {
+    pub user: User,
+    pub cursor: String,
+}
+
+impl UserCursor {
+    pub fn try_from_user(user: User, sort: &Option<String>) -> CursorResult<Self> {
+        let cursor = Cursor::new(user.id().to_string(), match sort.as_ref().map(String::borrow) {
+            Some(field) => match field {
+                "id" => Some(PrimaryCursor { k: "id".into(), v: Some(user.id().to_string()) }),
+                "username" => Some(PrimaryCursor {
+                    k: "username".into(),
+                    v: Some(user.username().clone()) }),
+                "email" => user.email().map(|email| PrimaryCursor {
+                    k: "email".into(),
+                    v: email.clone() }),
+                "nickname" => Some(PrimaryCursor {
+                    k: "nickname".into(),
+                    v: user.nickname().clone() }),
+                "blocked" => user.blocked().map(|blocked| PrimaryCursor {
+                    k: "blocked".into(),
+                    v: blocked.clone().as_ref().map(bool::to_string) }),
+                "created_at" => Some(PrimaryCursor {
+                    k: "create_at".into(),
+                    v: Some(user.created_at().to_rfc3339()) }),
+                "updated_at" => user.updated_at().map(|updated_at| PrimaryCursor {
+                    k: "updated_at".into(),
+                    v: Some(updated_at.to_rfc3339()) }),
+                _ => None
+            },
+            _ => None,
+        });
+        cursor.try_to_str()
+            .map(|cursor| UserCursor {
+                user,
+                cursor,
+            })
     }
 }
 
@@ -472,7 +564,8 @@ pub struct Query {
     insert_one_roles: Statement,
     fetch_avatars: Statement,
     update_avatars: Statement,
-    find_one_all: Statement,
+    find_without_roles: Statement,
+    find_roles_from_user_to_id: Statement,
     find_one_public: Statement,
     find_one_to_username: Statement,
     fetch_permission_tree: Statement,
@@ -579,13 +672,18 @@ impl Query {
                 RETURNING updated_at",
             &[Type::TEXT, Type::TEXT, Type::INT4]
         ).await.unwrap();
-        let find_one_all = client.prepare_typed(
-            "SELECT \"user\".id, role.id as role, username, email, nickname, avatar, avatar128, \
+        let find_without_roles = client.prepare_typed(
+            "SELECT \"user\".id, username, email, nickname, avatar, avatar128, \
                         blocked, \"user\".created_at, \"user\".updated_at \
-                FROM \"user\", user_role, role \
-                WHERE \"user\".id = $1 AND NOT role.deleted AND \"user\".id = user_role.user \
-                    AND role.id = user_role.role AND NOT role.deleted",
-            &[Type::INT4],
+                FROM (SELECT UNNEST($1) AS uid) AS temp, \"user\" \
+                WHERE \"user\".id = uid AND NOT deleted",
+            &[Type::INT4_ARRAY],
+        ).await.unwrap();
+        let find_roles_from_user_to_id = client.prepare_typed(
+            "SELECT user_role.user, user_role.role \
+                FROM (SELECT UNNEST($1) AS uid) AS temp, user_role, role \
+                WHERE user_role.user = uid AND user_role.role = role.id AND NOT role.deleted",
+            &[Type::INT4_ARRAY],
         ).await.unwrap();
         let find_one_public = client.prepare_typed(
             "SELECT id, username, nickname, avatar, avatar128, created_at FROM \"user\" \
@@ -727,7 +825,8 @@ impl Query {
             insert_one_roles,
             fetch_avatars,
             update_avatars,
-            find_one_all,
+            find_without_roles,
+            find_roles_from_user_to_id,
             find_one_public,
             find_one_to_username,
             fetch_permission_tree,
@@ -926,14 +1025,43 @@ impl Query {
         &self, client: &Client, uid: i32,
     ) -> Result<UserAll> {
         let rows = client
-            .query(&self.find_one_all, &[&uid])
+            .query(&self.find_without_roles, &[&vec![uid]])
             .await?;
         let row = rows
             .get(0)
             .ok_or_else(|| Error::UserNotFound)?;
-        Ok(UserAll::from((UserWithoutRoles::from(row), rows.iter()
+        let user = UserWithoutRoles::from(row);
+        let rows = client
+            .query(&self.find_roles_from_user_to_id, &[&vec![uid]])
+            .await?;
+        Ok(UserAll::from((user, rows.iter()
             .map(|x| x.get("role"))
             .collect())))
+    }
+    pub async fn add_roles(
+        &self, client: &Client, users_without_roles: Vec<UserWithoutRoles>,
+    ) -> Result<Vec<UserAll>> {
+        let ids = users_without_roles.iter()
+            .map(|x| x.id)
+            .collect::<Vec<_>>();
+        let rows = client
+            .query(&self.find_roles_from_user_to_id, &[&ids])
+            .await?;
+        let mut user_roles: HashMap<i32, Vec<i32>> = HashMap::new();
+        for row in rows.iter() {
+            user_roles.entry(row.get("user"))
+                .or_insert_with(Vec::new)
+                .push(row.get("role"))
+        }
+        Ok(users_without_roles.into_iter()
+            .map(|user| {
+                let uid = user.id;
+                UserAll::from((user, user_roles.get(&uid)
+                    .map(Vec::clone)
+                    .unwrap_or_else(Vec::new)
+                ))
+            })
+            .collect())
     }
     pub async fn find_one_public(
         &self, client: &Client, uid: i32,

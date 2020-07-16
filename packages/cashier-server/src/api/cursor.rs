@@ -119,7 +119,7 @@ pub async fn process_query(
         conditions.push(Cursor::try_from_str(&after[..], &sort)?.to_sql(generator, !desc)?)
     }
     let condition = conditions.join(" AND ");
-    let statement = format!("SELECT {} FROM {} WHERE {} ORDER BY {} LIMIT {}",
+    let statement = format!("SELECT DISTINCT {} FROM {} WHERE {} ORDER BY {} LIMIT {}",
                             projection, table, condition, order_by, usize::from(size.clone()));
     let mut rows = app_data.db.read().await
         .query(&statement[..], &[])

@@ -95,7 +95,7 @@ impl FieldConfig {
             escape_handler: None,
         }
     }
-    pub fn new_number_field<T>(field: &str, rename: Option<String>) -> Self {
+    pub fn new_number_field<T: FromStr + ToString + 'static>(field: &str, rename: Option<String>) -> Self {
         Self {
             field: field.into(),
             rename,
@@ -104,7 +104,7 @@ impl FieldConfig {
             partial_order: true,
             partial_equal: true,
             use_like: false,
-            escape_handler: Some(escape_unquoted::<i32>()),
+            escape_handler: Some(escape_unquoted::<T>()),
         }
     }
     pub fn new_date_time_field(field: &str, rename: Option<String>) -> Self {

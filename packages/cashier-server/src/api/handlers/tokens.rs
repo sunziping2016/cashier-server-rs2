@@ -54,7 +54,6 @@ pub struct AcquireTokenByUsernameRequest {
     password: Password,
 }
 
-//noinspection ALL
 async fn acquire_token_impl_impl(
     app_data: &web::Data<AppState>,
     req: &web::HttpRequest,
@@ -86,7 +85,6 @@ async fn acquire_token_impl_impl(
     })))
 }
 
-//noinspection ALL
 async fn acquire_token_impl(
     app_data: &web::Data<AppState>,
     req: &web::HttpRequest,
@@ -102,7 +100,6 @@ async fn acquire_token_impl(
     respond(response)
 }
 
-//noinspection ALL
 async fn acquire_token_by_username(
     app_data: web::Data<AppState>,
     data: ValidatedJson<AcquireTokenByUsernameRequest>,
@@ -132,7 +129,6 @@ pub struct AcquireTokenByEmailRequest {
     password: Password,
 }
 
-//noinspection ALL
 async fn acquire_token_by_email(
     app_data: web::Data<AppState>,
     data: ValidatedJson<AcquireTokenByEmailRequest>,
@@ -153,7 +149,6 @@ async fn acquire_token_by_email(
     acquire_token_impl(&app_data, &req, &auth, uid, "email").await
 }
 
-//noinspection ALL
 async fn resume_token(
     app_data: web::Data<AppState>,
     auth: Auth,
@@ -220,7 +215,6 @@ lazy_static! {
         .field(FieldConfig::new_string_field("acquire_user_agent", None));
 }
 
-//noinspection ALL
 async fn list_token_for_me(
     app_data: web::Data<AppState>,
     request: ValidatedQuery<ListTokenRequest>,
@@ -242,7 +236,6 @@ async fn list_token_for_me(
     respond(ListTokenResponse { results })
 }
 
-//noinspection ALL
 async fn list_token(
     app_data: web::Data<AppState>,
     request: ValidatedQuery<ListTokenRequest>,
@@ -274,7 +267,6 @@ struct RevokeTokenResponse {
     count: usize,
 }
 
-//noinspection ALL
 async fn revoke_token_impl(
     app_data: web::Data<AppState>,
     auth: Auth,
@@ -324,7 +316,6 @@ async fn revoke_token_impl(
     })
 }
 
-//noinspection ALL
 async fn revoke_token_for_me(
     app_data: web::Data<AppState>,
     auth: Auth,
@@ -335,7 +326,6 @@ async fn revoke_token_for_me(
     revoke_token_impl(app_data, auth, &request.query, Some(uid)).await
 }
 
-//noinspection ALL
 async fn revoke_token(
     app_data: web::Data<AppState>,
     auth: Auth,
@@ -351,7 +341,6 @@ struct JtiPath {
     jti: Id,
 }
 
-//noinspection ALL
 async fn revoke_single_token_impl(
     app_data: web::Data<AppState>,
     auth: Auth,
@@ -374,7 +363,6 @@ async fn revoke_single_token_impl(
     respond(())
 }
 
-//noinspection ALL
 async fn revoke_single_token(
     app_data: web::Data<AppState>,
     jti_path: ValidatedPath<JtiPath>,
@@ -384,7 +372,6 @@ async fn revoke_single_token(
     revoke_single_token_impl(app_data, auth, jti_path.jti.clone().into(), None).await
 }
 
-//noinspection ALL
 async fn revoke_single_token_for_me(
     app_data: web::Data<AppState>,
     jti_path: ValidatedPath<JtiPath>,
@@ -395,7 +382,6 @@ async fn revoke_single_token_for_me(
     revoke_single_token_impl(app_data, auth, jti_path.jti.clone().into(), Some(uid)).await
 }
 
-//noinspection ALL
 async fn revoke_this_token_for_me(
     app_data: web::Data<AppState>,
     auth: Auth,
@@ -407,7 +393,6 @@ async fn revoke_this_token_for_me(
     revoke_single_token_impl(app_data, auth, jti, Some(uid)).await
 }
 
-//noinspection ALL
 pub fn tokens_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::ServiceConfig)> {
     let state = state.clone();
     Box::new(move |cfg| {

@@ -21,6 +21,7 @@ use crate::{
             Id,
             Any24,
             Any6,
+            Cursor as CursorField,
         },
     },
     queries::{
@@ -28,6 +29,7 @@ use crate::{
         users::{
             User,
             UserRegistrationPublic,
+            UserEmailUpdatingPublic,
         },
     },
     websocket::push_messages::{UserCreated, UserUpdated, TokenRevoked, double_option},
@@ -54,8 +56,11 @@ use std::{
 };
 use validator::Validate;
 use validator_derive::Validate;
-use crate::queries::users::UserEmailUpdatingPublic;
+use cashier_query::generator::{QueryConfig, FieldConfig, escape_unquoted};
 use lazy_static::lazy_static;
+use crate::api::fields::PaginationSize;
+use crate::queries::users::{UserCursor, UserWithoutRoles};
+use crate::api::cursor::process_query;
 
 #[derive(Debug, Validate, Deserialize)]
 struct CreateUserRequest {
@@ -977,6 +982,67 @@ async fn update_password(
     update_password_impl(app_data, auth, uid, request.password.clone().into(), None).await
 }
 
+lazy_static! {
+    static ref LIST_USER_GENERATOR: QueryConfig = QueryConfig::new()
+        .field(FieldConfig::new_number_field::<i32>("id", None))
+        .field(FieldConfig::new_string_field("username", None))
+        .field(FieldConfig::new_string_field("email", None))
+        .field(FieldConfig::new_string_field("nickname", None))
+        .field(FieldConfig::new_number_field::<bool>("blocked", None))
+        .field(FieldConfig::new_date_time_field("created_at", None))
+        .field(FieldConfig::new_date_time_field("updated_at", None))
+        .field(FieldConfig::new("role")
+            .partial_equal()
+            .escape_handler(escape_unquoted::<i32>()));
+}
+
+#[derive(Debug, Validate, Deserialize)]
+struct ListUserRequest {
+    #[validate]
+    before: Option<CursorField>,
+    #[validate]
+    after: Option<CursorField>,
+    #[validate]
+    #[serde(default)]
+    size: PaginationSize,
+    sort: Option<String>,
+    #[serde(default)]
+    desc: bool,
+    #[serde(default)]
+    query: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ListUserResponse {
+    results: Vec<UserCursor>,
+}
+
+async fn list_user(
+    app_data: web::Data<AppState>,
+    request: ValidatedQuery<ListUserRequest>,
+    auth: Auth,
+) -> ApiResult<ListUserResponse> {
+    auth.try_permission("user", "list")?;
+    let users = process_query(&LIST_USER_GENERATOR,
+                              &request.before, &request.after, &request.size,
+                              &request.sort, request.desc, &request.query,
+                              vec!["(NOT \"user\".deleted AND user_role.user = \"user\".id AND \
+                                  user_role.role = role.id AND NOT role.deleted)".into()],
+                              "\"user\".id, username, email, nickname, avatar, avatar128, \
+                                  blocked, \"user\".created_at, \"user\".updated_at",
+                              "\"user\", user_role, role", app_data.clone()).await?.iter()
+        .map(UserWithoutRoles::from)
+        .collect::<Vec<_>>();
+    let users = app_data.query.user
+        .add_roles(&*app_data.db.read().await, users)
+        .await
+        .map_err(|e| internal_server_error!(e))?;
+    let results = users.into_iter()
+        .map(|user| { UserCursor::try_from_user(User::All(user), &request.sort) })
+        .collect::<Result<Vec<_>, _>>()?;
+    respond(ListUserResponse { results })
+}
+
 pub fn users_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::ServiceConfig)> {
     if let Err(e) = std::fs::create_dir_all(Path::new(&state.config.media.root)
         .join(crate::constants::AVATAR_FOLDER))  {
@@ -1052,7 +1118,7 @@ pub fn users_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::Servic
                 .route("/{uid}", web::patch().to(update_user))
                 // .route("/{uid}", web::delete().to(index))
                 .route("", web::post().to(create_user))
-                // .route("", web::get().to(index))
+                .route("", web::get().to(list_user))
         ).service(
             web::scope("public-users")
                 .app_data(state.clone())
@@ -1060,6 +1126,7 @@ pub fn users_api(state: &web::Data<AppState>) -> Box<dyn FnOnce(&mut web::Servic
                 .app_data(default_path_config())
                 .app_data(default_query_config())
                 .route("/{uid}", web::get().to(read_user_public))
+                // .route("", web::get().to(index))
         );
     })
 }
