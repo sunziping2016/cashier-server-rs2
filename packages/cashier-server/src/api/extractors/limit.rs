@@ -6,7 +6,7 @@ use actix_web::{dev::ServiceRequest, dev::ServiceResponse, Error, ResponseError,
 use futures::future::{ok, Ready};
 use futures::Future;
 use crate::api::errors::ApiError;
-use crate::api::app_state::AppState;
+use crate::api::app_state::AppDatabase;
 use crate::internal_server_error;
 use log::warn;
 use std::sync::{Arc, RwLock};
@@ -16,7 +16,7 @@ pub struct RateLimit {
     pub burst: f64,
     pub rate: f64, // token per second
     pub reset_on_fail: bool,
-    pub app_data: web::Data<AppState>,
+    pub database: web::Data<AppDatabase>,
 }
 
 impl<S, B> Transform<S> for RateLimit
@@ -38,7 +38,7 @@ impl<S, B> Transform<S> for RateLimit
             burst: self.burst,
             rate: self.rate,
             reset_on_fail: self.reset_on_fail,
-            app_data: self.app_data.clone(),
+            database: self.database.clone(),
             service: Arc::new(RwLock::new(service)),
         })
     }
@@ -49,7 +49,7 @@ pub struct SayHiMiddleware<S> {
     burst: f64,
     rate: f64, // token per second
     reset_on_fail: bool,
-    app_data: web::Data<AppState>,
+    database: web::Data<AppDatabase>,
     service: Arc<RwLock<S>>,
 }
 
@@ -69,7 +69,7 @@ impl<S, B> Service for SayHiMiddleware<S>
     }
 
     fn call(&mut self, req: ServiceRequest) -> Self::Future {
-        let app_data = self.app_data.clone();
+        let database = self.database.clone();
         let subject = self.subject.clone();
         let remote = req.connection_info().remote().map(str::to_owned);
         let burst = self.burst;
@@ -79,8 +79,8 @@ impl<S, B> Service for SayHiMiddleware<S>
         Box::pin(async move {
             match remote {
                 Some(remote) => {
-                    match app_data.query.limit
-                        .try_acquire_token(&mut *app_data.db.write().await, &subject, &remote,
+                    match database.query.limit
+                        .try_acquire_token(&mut *database.db.write().await, &subject, &remote,
                                            burst, rate, reset_on_fail)
                         .await {
                         Ok(success) => if !success {

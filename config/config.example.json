@@ -13,5 +13,11 @@
     "sender": "Cashier <cashier@example.com>",
     "username": "cashier@example.com",
     "password": "password"
+  },
+  "geoip": {
+    "as": "/usr/share/GeoIP/GeoIPASNum.dat",
+    "asV6": "/usr/share/GeoIP/GeoIPASNumv6.dat",
+    "city": "/usr/share/GeoIP/GeoIPCity.dat",
+    "cityV6": "/usr/share/GeoIP/GeoIPCityv6.dat"
   }
 }

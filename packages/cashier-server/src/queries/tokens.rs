@@ -8,6 +8,8 @@ use jsonwebtoken::{
 };
 use crate::api::cursor::{Result as CursorResult, Cursor, PrimaryCursor};
 use std::borrow::Borrow;
+use geoip::{CityInfo, ASInfo};
+use std::convert::TryFrom;
 
 pub struct Query {
     create_token: Statement,
@@ -15,7 +17,8 @@ pub struct Query {
     check_token_revoked: Statement,
     revoke_token: Statement,
     revoke_token_with_uid: Statement,
-    find_tokens_from_user: Statement,
+    read_token: Statement,
+    read_token_with_uid: Statement,
     revoke_tokens_from_user: Statement,
 }
 
@@ -28,6 +31,7 @@ pub struct JwtClaims {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct Token {
     pub id: i32,
     pub user: i32,
@@ -36,6 +40,12 @@ pub struct Token {
     pub acquire_method: String,
     pub acquire_host: String,
     pub acquire_remote: Option<String>,
+    pub acquire_remote_country: Option<String>,
+    pub acquire_remote_country_name: Option<String>,
+    pub acquire_remote_region: Option<String>,
+    pub acquire_remote_region_name: Option<String>,
+    pub acquire_remote_as_number: Option<u32>,
+    pub acquire_remote_as_name: Option<String>,
     pub acquire_user_agent: Option<String>,
 }
 
@@ -51,18 +61,30 @@ impl TokenCursor {
             Some(field) => match field {
                 "id" => Some(PrimaryCursor { k: "id".into(), v: Some(token.id.to_string()) }),
                 "user" => Some(PrimaryCursor { k: "user".into(), v: Some(token.user.to_string()) }),
-                "issued_at" => Some(PrimaryCursor { k: "issued_at".into(),
+                "issuedAt" => Some(PrimaryCursor { k: "issuedAt".into(),
                     v: Some(token.issued_at.to_rfc3339()) }),
-                "expires_at" => Some(PrimaryCursor { k: "expires_at".into(),
+                "expiresAt" => Some(PrimaryCursor { k: "expiresAt".into(),
                     v: Some(token.expires_at.to_rfc3339()) }),
-                "acquire_method" => Some(PrimaryCursor { k: "acquire_method".into(),
+                "acquireMethod" => Some(PrimaryCursor { k: "acquireMethod".into(),
                     v: Some(token.acquire_method.clone()) }),
-                "acquire_host" => Some(PrimaryCursor { k: "acquire_host".into(),
+                "acquireHost" => Some(PrimaryCursor { k: "acquireHost".into(),
                     v: Some(token.acquire_host.clone()) }),
-                "acquire_remote" => Some(PrimaryCursor { k: "acquire_remote".into(),
+                "acquireRemote" => Some(PrimaryCursor { k: "acquireRemote".into(),
                     v: token.acquire_remote.clone() }),
-                "acquire_user_agent" => Some(PrimaryCursor { k: "acquire_user_agent".into(),
+                "acquireUserAgent" => Some(PrimaryCursor { k: "acquireUserAgent".into(),
                     v: token.acquire_user_agent.clone() }),
+                "acquireRemoteCountry" => Some(PrimaryCursor { k: "acquireRemoteCountry".into(),
+                    v: token.acquire_remote_country.clone() }),
+                "acquireRemoteCountryName" => Some(PrimaryCursor { k: "acquireRemoteCountryName".into(),
+                    v: token.acquire_remote_country_name.clone() }),
+                "acquireRemoteRegion" => Some(PrimaryCursor { k: "acquireRemoteRegion".into(),
+                    v: token.acquire_remote_region.clone() }),
+                "acquireRemoteRegionName" => Some(PrimaryCursor { k: "acquireRemoteRegionName".into(),
+                    v: token.acquire_remote_region_name.clone() }),
+                "acquireRemoteAsNumber" => Some(PrimaryCursor { k: "acquireRemoteAsNumber".into(),
+                    v: token.acquire_remote_as_number.as_ref().map(u32::to_string) }),
+                "acquireRemoteAsName" => Some(PrimaryCursor { k: "acquireRemoteAsName".into(),
+                    v: token.acquire_remote_as_name.clone() }),
                 _ => None
             },
             _ => None,
@@ -86,6 +108,14 @@ impl From<&Row> for Token {
             acquire_host: row.get("acquire_host"),
             acquire_remote: row.get("acquire_remote"),
             acquire_user_agent: row.get("acquire_user_agent"),
+            acquire_remote_country: row.get("acquire_remote_country"),
+            acquire_remote_country_name: row.get("acquire_remote_country_name"),
+            acquire_remote_region: row.get("acquire_remote_region"),
+            acquire_remote_region_name: row.get("acquire_remote_region_name"),
+            acquire_remote_as_number: row.get::<&str, Option<i64>>("acquire_remote_as_number")
+                .map(|x| u32::try_from(x).ok())
+                .flatten(),
+            acquire_remote_as_name: row.get("acquire_remote_as_name"),
         }
     }
 }
@@ -100,10 +130,15 @@ impl Query {
     pub async fn new(client: &Client) -> Self {
         let create_token = client.prepare_typed(
             &format!("INSERT INTO token (\"user\", issued_at, expires_at, acquire_method, \
-                                         acquire_host, acquire_remote, acquire_user_agent, revoked) \
-                VALUES ($1, NOW(), NOW() + INTERVAL '{}', $2, $3, $4, $5, false) \
+                                         acquire_host, acquire_remote, \
+                                         acquire_remote_country, acquire_remote_country_name, \
+                                         acquire_remote_region, acquire_remote_region_name, \
+                                         acquire_remote_as_number, acquire_remote_as_name, \
+                                         acquire_user_agent, revoked) \
+                VALUES ($1, NOW(), NOW() + INTERVAL '{}', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, false) \
                 RETURNING id, issued_at, expires_at", crate::constants::JWT_EXPIRE),
-            &[Type::INT4, Type::TEXT, Type::TEXT, Type::TEXT, Type::TEXT],
+            &[Type::INT4, Type::TEXT, Type::TEXT, Type::TEXT, Type::TEXT, Type::TEXT,
+                Type::TEXT, Type::TEXT, Type::INT8, Type::TEXT, Type::TEXT],
         ).await.unwrap();
         let get_secret = client.prepare(
             "SELECT jwt_secret FROM global_settings LIMIT 1",
@@ -116,19 +151,31 @@ impl Query {
             "UPDATE token SET revoked = true \
                 WHERE id = $1 AND NOT revoked \
                 RETURNING id, \"user\"",
-            &[Type::INT4]
+            &[Type::INT4],
         ).await.unwrap();
         let revoke_token_with_uid = client.prepare_typed(
             "UPDATE token SET revoked = true \
                 WHERE id = $1 AND \"user\" = $2 AND NOT revoked \
                 RETURNING id, \"user\"",
-            &[Type::INT4, Type::INT4]
+            &[Type::INT4, Type::INT4],
         ).await.unwrap();
-        let find_tokens_from_user = client.prepare_typed(
+        let read_token = client.prepare_typed(
             "SELECT id, \"user\", issued_at, expires_at, acquire_method, \
-                    acquire_host, acquire_remote, acquire_user_agent FROM token \
-                 WHERE \"user\" = $1 AND expires_at > NOW() AND NOT revoked",
-            &[Type::INT4]
+                acquire_host, acquire_remote, acquire_user_agent, \
+                acquire_remote_country, acquire_remote_country_name, \
+                acquire_remote_region, acquire_remote_region_name, \
+                acquire_remote_as_number, acquire_remote_as_name FROM token \
+                WHERE id = $1 AND NOT revoked",
+            &[Type::INT4],
+        ).await.unwrap();
+        let read_token_with_uid = client.prepare_typed(
+            "SELECT id, \"user\", issued_at, expires_at, acquire_method, \
+                acquire_host, acquire_remote, acquire_user_agent, \
+                acquire_remote_country, acquire_remote_country_name, \
+                acquire_remote_region, acquire_remote_region_name, \
+                acquire_remote_as_number, acquire_remote_as_name FROM token \
+                WHERE id = $1 AND \"user\" = $2 AND NOT revoked",
+            &[Type::INT4],
         ).await.unwrap();
         let revoke_tokens_from_user = client.prepare_typed(
             "UPDATE token SET revoked = true \
@@ -142,16 +189,27 @@ impl Query {
             check_token_revoked,
             revoke_token,
             revoke_token_with_uid,
-            find_tokens_from_user,
+            read_token,
+            read_token_with_uid,
             revoke_tokens_from_user,
         }
     }
     pub async fn create_token(
         &self, client: &Client, user: i32, method: &str,
         host: &str, remote: Option<&str>, user_agent: Option<&str>,
+        city_info: &Option<CityInfo>, as_info: &Option<ASInfo>,
     ) -> Result<(String, JwtClaims)> {
         let row = client
-            .query_one(&self.create_token, &[&user, &method, &host, &remote, &user_agent])
+            .query_one(&self.create_token, &[
+                &user, &method, &host, &remote,
+                &city_info.as_ref().map(|x| x.country_code.clone()).flatten(),
+                &city_info.as_ref().map(|x| x.country_name.clone()).flatten(),
+                &city_info.as_ref().map(|x| x.region.clone()).flatten(),
+                &city_info.as_ref().map(|x| x.city.clone()).flatten(),
+                &as_info.as_ref().map(|x| i64::from(x.asn)),
+                &as_info.as_ref().map(|x| x.name.clone()),
+                &user_agent
+            ])
             .await?;
         let id: i32 = row.get("id");
         let issued_at: DateTime<Utc> = row.get("issued_at");
@@ -203,14 +261,19 @@ impl Query {
             user: row.get("user"),
         })
     }
-    pub async fn find_tokens_from_user(&self, client: &Client, user: i32) -> Result<Vec<Token>> {
-        let rows = client
-            .query(&self.find_tokens_from_user, &[&user])
-            .await?;
-        let results = rows.iter()
-            .map(Token::from)
-            .collect();
-        Ok(results)
+    pub async fn read_token(&self, client: &Client, id: i32, uid: Option<i32>) -> Result<Token> {
+        let rows = match uid {
+            Some(uid) => client
+                .query(&self.read_token_with_uid, &[&id, &uid])
+                .await?,
+            None => client
+                .query(&self.read_token, &[&id])
+                .await?,
+        };
+        let row = rows
+            .get(0)
+            .ok_or_else(|| Error::TokenNotFound)?;
+        Ok(Token::from(row))
     }
     pub async fn revoke_tokens_from_user(&self, client: &Client, user: i32) -> Result<Vec<TokenIdUser>> {
         let rows = client

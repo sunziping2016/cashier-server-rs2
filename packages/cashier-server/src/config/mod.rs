@@ -49,6 +49,14 @@ pub struct SmtpConfig {
 }
 
 #[derive(Debug, Clone)]
+pub struct GeoIpConfig {
+    pub asn: Option<String>,
+    pub asn_v6: Option<String>,
+    pub city: Option<String>,
+    pub city_v6: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct StartConfig {
     pub db: String,
     pub redis: String,
@@ -56,6 +64,7 @@ pub struct StartConfig {
     pub site: String,
     pub media: MediaConfig,
     pub smtp: SmtpConfig,
+    pub geoip: GeoIpConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -101,6 +110,27 @@ impl SmtpConfigFile {
 }
 
 #[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeoIpConfigFile {
+    pub asn: Option<String>,
+    pub asn_v6: Option<String>,
+    pub city: Option<String>,
+    pub city_v6: Option<String>,
+}
+
+impl GeoIpConfigFile {
+    pub fn new() -> Self {
+        Self {
+            asn: None,
+            asn_v6: None,
+            city: None,
+            city_v6: None,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ConfigFile {
     db: Option<String>,
     redis: Option<String>,
@@ -108,6 +138,7 @@ pub struct ConfigFile {
     site: Option<String>,
     media: Option<MediaConfigFile>,
     smtp: Option<SmtpConfigFile>,
+    geoip: Option<GeoIpConfigFile>,
 }
 
 impl ConfigFile {
@@ -119,6 +150,7 @@ impl ConfigFile {
             site: None,
             media: None,
             smtp: None,
+            geoip: None,
         }
     }
 
@@ -197,6 +229,22 @@ impl Config {
                 .long("smtp-password")
                 .about("SMTP password for authentication")
                 .takes_value(true))
+            .arg(Arg::with_name("geoip-asn")
+                .long("geoip-asn")
+                .about("IPv4 ASN info database")
+                .takes_value(true))
+            .arg(Arg::with_name("geoip-asn-v6")
+                .long("geoip-asn-v6")
+                .about("IPv6 ASN info database")
+                .takes_value(true))
+            .arg(Arg::with_name("geoip-city")
+                .long("geoip-city")
+                .about("IPv4 City info database")
+                .takes_value(true))
+            .arg(Arg::with_name("geoip-city-v6")
+                .long("geoip-city-v6")
+                .about("IPv6 City info database")
+                .takes_value(true))
             .subcommand(App::new("init")
                 .about("Initializes all databases")
                 .arg(Arg::with_name("reset")
@@ -244,6 +292,17 @@ impl Config {
             .or(smtp_config_file.username.clone());
         smtp_config_file.password = matches.value_of("smtp-password").map(String::from)
             .or(smtp_config_file.password.clone());
+        let mut default_geoip_config_file = GeoIpConfigFile::new();
+        let geoip_config_file = config_file.geoip.as_mut()
+            .unwrap_or(&mut default_geoip_config_file);
+        geoip_config_file.asn = matches.value_of("geoip-asn").map(String::from)
+            .or(geoip_config_file.asn.clone());
+        geoip_config_file.asn_v6 = matches.value_of("geoip-asn-v6").map(String::from)
+            .or(geoip_config_file.asn_v6.clone());
+        geoip_config_file.city = matches.value_of("geoip-city").map(String::from)
+            .or(geoip_config_file.city.clone());
+        geoip_config_file.city_v6 = matches.value_of("geoip-city-v6").map(String::from)
+            .or(geoip_config_file.city_v6.clone());
         match matches.subcommand() {
             ("init", Some(sub_matches)) => Ok(Config::Init(InitConfig {
                 db: config_file.db
@@ -277,6 +336,12 @@ impl Config {
                         .ok_or_else(|| ConfigError::MissingArgument("smtp.sender".into()))?,
                     username: smtp_config_file.username.clone(),
                     password: smtp_config_file.password.clone(),
+                },
+                geoip: GeoIpConfig {
+                    asn: geoip_config_file.asn.clone(),
+                    asn_v6: geoip_config_file.asn_v6.clone(),
+                    city: geoip_config_file.city.clone(),
+                    city_v6: geoip_config_file.city_v6.clone(),
                 },
             })),
             _ => Err(ConfigError::InvalidSubcommand)

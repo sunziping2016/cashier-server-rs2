@@ -1,7 +1,7 @@
 use crate::{
     api::{
         api_v1,
-        app_state::AppState,
+        app_state::{AppConfig, AppSubscriber, AppSmtp, AppDatabase},
     },
     config::StartConfig,
     queries::Query,
@@ -74,11 +74,17 @@ pub async fn start(config: &StartConfig) -> Result<()> {
     )))
         .build();
 
-    let app_data = web::Data::new(AppState {
+    let app_state = web::Data::new(AppConfig {
         config: config.clone(),
+    });
+    let app_database = web::Data::new(AppDatabase {
         db: RwLock::from(client),
         query,
+    });
+    let app_subscriber = web::Data::new(AppSubscriber {
         subscriber,
+    });
+    let app_smtp = web::Data::new(AppSmtp {
         smtp,
     });
     let media_serve = config.media.serve;
@@ -87,7 +93,12 @@ pub async fn start(config: &StartConfig) -> Result<()> {
     HttpServer::new(move || {
         let mut app = App::new()
             .wrap(Logger::default())
-            .configure(api_v1(&app_data));
+            .configure(api_v1(
+                &app_state,
+                &app_database,
+                &app_subscriber,
+                &app_smtp,
+            ));
         if media_serve {
             app = app.service(fs::Files::new(&media_url, &media_root))
         }

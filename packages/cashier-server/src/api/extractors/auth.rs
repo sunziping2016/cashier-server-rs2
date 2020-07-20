@@ -2,7 +2,6 @@ use crate::{
     internal_server_error,
     api::{
         errors::ApiError,
-        app_state::AppState,
     },
     queries::{
         tokens::JwtClaims,
@@ -14,6 +13,7 @@ use actix_web::{
     web, FromRequest,
 };
 use futures::future::{LocalBoxFuture, FutureExt};
+use crate::api::app_state::AppDatabase;
 
 #[derive(Debug)]
 pub struct Auth {
@@ -43,7 +43,7 @@ impl FromRequest for Auth {
     type Config = ();
 
     fn from_request(req: &web::HttpRequest, _: &mut actix_web::dev::Payload) -> Self::Future {
-        let app_data = match req.app_data::<web::Data<AppState>>() {
+        let database = match req.app_data::<web::Data<AppDatabase>>() {
             Some(st) => st.clone(),
             None => return futures::future::err(internal_server_error!()).boxed(),
         };
@@ -66,38 +66,38 @@ impl FromRequest for Auth {
         async move {
             let (claims, permissions) = match auth {
                 Some(token) => {
-                    let claims = app_data.query.token
-                        .verify_token(&*app_data.db.read().await, &token)
+                    let claims = database.query.token
+                        .verify_token(&*database.db.read().await, &token)
                         .await
                         .map_err(|e| match e {
                             QueryError::InvalidToken { error } => ApiError::InvalidToken { error },
                             e => internal_server_error!(e),
                         })?;
-                    app_data.query.token
-                        .check_token_revoked(&*app_data.db.read().await, claims.jti)
+                    database.query.token
+                        .check_token_revoked(&*database.db.read().await, claims.jti)
                         .await
                         .map_err(|e| match e {
                             QueryError::TokenNotFound => ApiError::InvalidToken { error: "TokenRevoked".into() },
                             e => internal_server_error!(e),
                         })?;
-                    app_data.query.user
-                        .check_user_valid_by_id(&*app_data.db.read().await, claims.uid)
+                    database.query.user
+                        .check_user_valid_by_id(&*database.db.read().await, claims.uid)
                         .await
                         .map_err(|e| match e {
                             QueryError::UserNotFound => ApiError::InvalidToken { error: "InvalidUser".into() },
                             QueryError::UserBlocked => ApiError::InvalidToken { error: "UserBlocked".into() },
                             e => internal_server_error!(e),
                         })?;
-                    let permissions = app_data.query.user
-                        .fetch_permission(&*app_data.db.read().await, claims.uid)
+                    let permissions = database.query.user
+                        .fetch_permission(&*database.db.read().await, claims.uid)
                         .await
                         .map_err(|e| internal_server_error!(e))?;
                     (Some(claims), permissions)
                 }
                 None => (
                     None,
-                    app_data.query.user
-                        .fetch_default_permission(&*app_data.db.read().await)
+                    database.query.user
+                        .fetch_default_permission(&*database.db.read().await)
                         .await
                         .map_err(|e| internal_server_error!(e))?,
                 )

@@ -13,7 +13,7 @@ use tokio_postgres::{
     Client, Statement, types::Type,
     IsolationLevel, Row,
 };
-use crate::api::app_state::AppState;
+use crate::api::app_state::AppSmtp;
 use crate::api::cursor::{Result as CursorResult, Cursor, PrimaryCursor};
 use std::borrow::Borrow;
 
@@ -25,10 +25,6 @@ impl Distribution<char> for Digit {
         const GEN_ASCII_STR_CHARSET: &[u8] = b"0123456789";
         GEN_ASCII_STR_CHARSET[(rng.next_u32() % RANGE) as usize] as char
     }
-}
-
-pub trait HasId {
-    fn get_id(&self) -> i32;
 }
 
 #[derive(Debug)]
@@ -78,6 +74,7 @@ pub enum EitherUsernameOrEmail {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UserPublic {
     pub id: i32,
     pub username: String,
@@ -101,35 +98,7 @@ impl From<&Row> for UserPublic {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct UserWithoutRoles {
-    pub id: i32,
-    pub username: String,
-    pub email: Option<String>,
-    pub nickname: Option<String>,
-    pub avatar: Option<String>,
-    pub avatar128: Option<String>,
-    pub blocked: Option<bool>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-impl From<&Row> for UserWithoutRoles {
-    fn from(row: &Row) -> Self {
-        Self {
-            id: row.get("id"),
-            username: row.get("username"),
-            email: row.get("email"),
-            nickname: row.get("nickname"),
-            avatar: row.get("avatar"),
-            avatar128: row.get("avatar128"),
-            blocked: row.get("blocked"),
-            created_at: row.get("created_at"),
-            updated_at: row.get("updated_at"),
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UserAll {
     pub id: i32,
     pub username: String,
@@ -141,23 +110,6 @@ pub struct UserAll {
     pub blocked: Option<bool>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-}
-
-impl From<(UserWithoutRoles, Vec<i32>)> for UserAll {
-    fn from(data: (UserWithoutRoles, Vec<i32>)) -> Self {
-        Self {
-            id: data.0.id,
-            username: data.0.username,
-            roles: data.1,
-            email: data.0.email,
-            nickname: data.0.nickname,
-            avatar: data.0.avatar,
-            avatar128: data.0.avatar128,
-            blocked: data.0.blocked,
-            created_at: data.0.created_at,
-            updated_at: data.0.updated_at,
-        }
-    }
 }
 
 impl From<&Row> for UserAll {
@@ -182,7 +134,6 @@ impl From<&Row> for UserAll {
 #[serde(rename_all = "kebab-case")]
 pub enum User {
     Public(UserPublic),
-    WithoutRoles(UserWithoutRoles),
     All(UserAll),
 }
 
@@ -190,10 +141,6 @@ impl User {
     pub fn map_avatars(&mut self, mapping: impl Fn(&String) -> String) {
         match self {
             User::Public(user) => {
-                user.avatar = user.avatar.as_ref().map(&mapping);
-                user.avatar128 = user.avatar128.as_ref().map(&mapping);
-            }
-            User::WithoutRoles(user) => {
                 user.avatar = user.avatar.as_ref().map(&mapping);
                 user.avatar128 = user.avatar128.as_ref().map(&mapping);
             }
@@ -206,55 +153,49 @@ impl User {
     pub fn id(&self) -> i32 {
         match self {
             User::Public(user) => user.id,
-            User::WithoutRoles(user) => user.id,
             User::All(user) => user.id,
         }
     }
     pub fn username(&self) -> &String {
         match self {
             User::Public(user) => &user.username,
-            User::WithoutRoles(user) => &user.username,
             User::All(user) => &user.username,
         }
     }
     pub fn email(&self) -> Option<&Option<String>> {
         match self {
             User::Public(_) => None,
-            User::WithoutRoles(user) => Some(&user.email),
             User::All(user) => Some(&user.email),
         }
     }
     pub fn nickname(&self) -> &Option<String> {
         match self {
             User::Public(user) => &user.nickname,
-            User::WithoutRoles(user) => &user.nickname,
             User::All(user) => &user.nickname,
         }
     }
     pub fn blocked(&self) -> Option<&Option<bool>> {
         match self {
             User::Public(_) => None,
-            User::WithoutRoles(user) => Some(&user.blocked),
             User::All(user) => Some(&user.blocked),
         }
     }
     pub fn created_at(&self) -> &DateTime<Utc> {
         match self {
             User::Public(user) => &user.created_at,
-            User::WithoutRoles(user) => &user.created_at,
             User::All(user) => &user.created_at,
         }
     }
     pub fn updated_at(&self) -> Option<&DateTime<Utc>> {
         match self {
             User::Public(_) => None,
-            User::WithoutRoles(user) => Some(&user.created_at),
             User::All(user) => Some(&user.created_at),
         }
     }
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UserCursor {
     pub user: User,
     pub cursor: String,
@@ -277,11 +218,11 @@ impl UserCursor {
                 "blocked" => user.blocked().map(|blocked| PrimaryCursor {
                     k: "blocked".into(),
                     v: blocked.clone().as_ref().map(bool::to_string) }),
-                "created_at" => Some(PrimaryCursor {
-                    k: "created_at".into(),
+                "createdAt" => Some(PrimaryCursor {
+                    k: "createdAt".into(),
                     v: Some(user.created_at().to_rfc3339()) }),
-                "updated_at" => user.updated_at().map(|updated_at| PrimaryCursor {
-                    k: "updated_at".into(),
+                "updatedAt" => user.updated_at().map(|updated_at| PrimaryCursor {
+                    k: "updatedAt".into(),
                     v: Some(updated_at.to_rfc3339()) }),
                 _ => None
             },
@@ -295,20 +236,11 @@ impl UserCursor {
     }
 }
 
-impl HasId for User {
-    fn get_id(&self) -> i32 {
-        match self {
-            User::Public(x) => x.id,
-            User::WithoutRoles(x) => x.id,
-            User::All(x) => x.id,
-        }
-    }
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RoleShort {
     id: i32,
     name: String,
+    permissions: Vec<i32>,
 }
 
 impl From<&Row> for RoleShort {
@@ -316,51 +248,13 @@ impl From<&Row> for RoleShort {
         Self {
             id: x.get("id"),
             name: x.get("name"),
+            permissions: x.get("permissions")
         }
     }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct RoleShortWithPermissions {
-    id: i32,
-    name: String,
-    permissions: Vec<i32>,
-}
-
-impl From<(RoleShort, Vec<i32>)> for RoleShortWithPermissions {
-    fn from(x: (RoleShort, Vec<i32>)) -> Self {
-        Self {
-            id: x.0.id,
-            name: x.0.name,
-            permissions: x.1,
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct RoleWithoutPermissions {
-    id: i32,
-    name: String,
-    display_name: String,
-    description: String,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
-}
-
-impl From<&Row> for RoleWithoutPermissions {
-    fn from(x: &Row) -> Self {
-        Self {
-            id: x.get("id"),
-            name: x.get("name"),
-            display_name: x.get("display_name"),
-            description: x.get("description"),
-            created_at: x.get("created_at"),
-            updated_at: x.get("updated_at"),
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RoleAll {
     id: i32,
     name: String,
@@ -371,16 +265,16 @@ pub struct RoleAll {
     updated_at: DateTime<Utc>,
 }
 
-impl From<(RoleWithoutPermissions, Vec<i32>)> for RoleAll {
-    fn from(x: (RoleWithoutPermissions, Vec<i32>)) -> Self {
+impl From<&Row> for RoleAll {
+    fn from(x: &Row) -> Self {
         Self {
-            id: x.0.id,
-            name: x.0.name,
-            permissions: x.1,
-            display_name: x.0.display_name,
-            description: x.0.description,
-            created_at: x.0.created_at,
-            updated_at: x.0.updated_at,
+            id: x.get("id"),
+            name: x.get("name"),
+            permissions: x.get("permissions"),
+            display_name: x.get("display_name"),
+            description: x.get("description"),
+            created_at: x.get("created_at"),
+            updated_at: x.get("updated_at"),
         }
     }
 }
@@ -390,23 +284,11 @@ impl From<(RoleWithoutPermissions, Vec<i32>)> for RoleAll {
 #[serde(rename_all = "kebab-case")]
 pub enum Role {
     Short(RoleShort),
-    ShortWithPermissions(RoleShortWithPermissions),
-    WithoutPermissions(RoleWithoutPermissions),
     All(RoleAll),
 }
 
-impl HasId for Role {
-    fn get_id(&self) -> i32 {
-        match self {
-            Role::Short(x) => x.id,
-            Role::ShortWithPermissions(x) => x.id,
-            Role::WithoutPermissions(x) => x.id,
-            Role::All(x) => x.id,
-        }
-    }
-}
-
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PermissionShort {
     id: i32,
     subject: String,
@@ -424,6 +306,7 @@ impl From<&Row> for PermissionShort {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PermissionAll {
     id: i32,
     subject: String,
@@ -582,7 +465,6 @@ pub struct Query {
     fetch_avatars: Statement,
     update_avatars: Statement,
     find_one_with_roles: Statement,
-    find_roles_from_user_to_id: Statement,
     find_one_public: Statement,
     find_one_to_username: Statement,
     fetch_permission_tree: Statement,
@@ -697,12 +579,6 @@ impl Query {
                 AND user_role.role = role.id AND NOT role.deleted \
             GROUP BY \"user\".id",
             &[Type::INT4],
-        ).await.unwrap();
-        let find_roles_from_user_to_id = client.prepare_typed(
-            "SELECT user_role.user, user_role.role \
-                FROM (SELECT UNNEST($1) AS uid) AS temp, user_role, role \
-                WHERE user_role.user = uid AND user_role.role = role.id AND NOT role.deleted",
-            &[Type::INT4_ARRAY],
         ).await.unwrap();
         let find_one_public = client.prepare_typed(
             "SELECT id, username, nickname, avatar, avatar128, created_at FROM \"user\" \
@@ -845,7 +721,6 @@ impl Query {
             fetch_avatars,
             update_avatars,
             find_one_with_roles,
-            find_roles_from_user_to_id,
             find_one_public,
             find_one_to_username,
             fetch_permission_tree,
@@ -1051,31 +926,6 @@ impl Query {
             .ok_or_else(|| Error::UserNotFound)?;
         Ok(UserAll::from(row))
     }
-    pub async fn add_roles(
-        &self, client: &Client, users_without_roles: Vec<UserWithoutRoles>,
-    ) -> Result<Vec<UserAll>> {
-        let ids = users_without_roles.iter()
-            .map(|x| x.id)
-            .collect::<Vec<_>>();
-        let rows = client
-            .query(&self.find_roles_from_user_to_id, &[&ids])
-            .await?;
-        let mut user_roles: HashMap<i32, Vec<i32>> = HashMap::new();
-        for row in rows.iter() {
-            user_roles.entry(row.get("user"))
-                .or_insert_with(Vec::new)
-                .push(row.get("role"))
-        }
-        Ok(users_without_roles.into_iter()
-            .map(|user| {
-                let uid = user.id;
-                UserAll::from((user, user_roles.get(&uid)
-                    .map(Vec::clone)
-                    .unwrap_or_else(Vec::new)
-                ))
-            })
-            .collect())
-    }
     pub async fn find_one_public(
         &self, client: &Client, uid: i32,
     ) -> Result<UserPublic> {
@@ -1128,7 +978,7 @@ impl Query {
     }
     pub async fn register_user(
         &self, client: &Client,
-        app_data: web::Data<AppState>, // for smtp
+        smtp: web::Data<AppSmtp>, // for smtp
         sender: &str, site: &str,
         username: &str, email: &str, password: &str,
     ) -> Result<UserRegistration> {
@@ -1153,7 +1003,7 @@ impl Query {
             .collect();
         let message = register_user_email(sender.parse()?, email.parse()?,
                                         site, username, &id, &code)?;
-        block(move || app_data.smtp.send(&message))
+        block(move || smtp.smtp.send(&message))
             .await?;
         let password = String::from(password);
         let password = block(move || bcrypt::hash(password, crate::constants::BCRYPT_COST))
@@ -1170,7 +1020,7 @@ impl Query {
         })
     }
     pub async fn confirm_registration(
-        &self, client: &mut Client, id: &str, code: &str,
+        &self, client: &mut Client, id: &str, code: &Option<String>,
     ) -> Result<UserCreatedByRegistration> {
         let transaction = client.build_transaction()
             .isolation_level(IsolationLevel::RepeatableRead)
@@ -1190,8 +1040,10 @@ impl Query {
         if expires_at < Utc::now() {
             return Err(Error::UserRegistrationExpired);
         }
-        if real_code != code {
-            return Err(Error::UserRegistrationWrongCode);
+        if let Some(code) = code {
+            if real_code != *code {
+                return Err(Error::UserRegistrationWrongCode);
+            }
         }
         let duplicated_rows = transaction
             .query(&self.find_one_from_username_email_to_username_email,
@@ -1245,7 +1097,7 @@ impl Query {
     }
     pub async fn resend_registration_email(
         &self, client: &Client,
-        app_data: web::Data<AppState>,
+        smtp: web::Data<AppSmtp>,
         sender: &str, site: &str, id: &str,
     ) -> Result<()> {
         let rows = client
@@ -1263,7 +1115,7 @@ impl Query {
         }
         let message = register_user_email(sender.parse()?, email.parse()?,
                                           site, &username, &id, &code)?;
-        block(move || app_data.smtp.send(&message))
+        block(move || smtp.smtp.send(&message))
             .await?;
         Ok(())
     }
@@ -1319,7 +1171,7 @@ impl Query {
     }
     pub async fn update_email(
         &self, client: &Client,
-        app_data: web::Data<AppState>, // for smtp
+        smtp: web::Data<AppSmtp>, // for smtp
         sender: &str, site: &str,
         uid: i32, new_email: &str,
     ) -> Result<UserEmailUpdating> {
@@ -1346,7 +1198,7 @@ impl Query {
             .collect();
         let message = update_user_email(sender.parse()?, new_email.parse()?,
                                         site, &username, &id, &code)?;
-        block(move || app_data.smtp.send(&message))
+        block(move || smtp.smtp.send(&message))
             .await?;
         let row = client
             .query_one(&self.insert_one_into_user_email_updating,
@@ -1360,7 +1212,7 @@ impl Query {
         })
     }
     pub async fn confirm_email_updating(
-        &self, client: &mut Client, id: &str, code: &str, required_uid: Option<i32>,
+        &self, client: &mut Client, id: &str, code: &Option<String>, required_uid: &Option<i32>,
     ) -> Result<UserIdEmailUpdatedAt> {
         let transaction = client.build_transaction()
             .isolation_level(IsolationLevel::RepeatableRead)
@@ -1376,17 +1228,18 @@ impl Query {
         let user: i32 = row.get("user");
         let new_email: String = row.get("new_email");
         let expires_at: DateTime<Utc> = row.get("expires_at");
-        match required_uid {
-            Some(required_uid) => if required_uid != user {
-                return Err(Error::UserNotMatch)
+        if let Some(required_uid) = required_uid {
+            if *required_uid != user {
+                return Err(Error::UserNotMatch);
             }
-            None => (),
         }
         if expires_at < Utc::now() {
             return Err(Error::UserEmailUpdatingExpired);
         }
-        if real_code != code {
-            return Err(Error::UserEmailUpdatingWrongCode);
+        if let Some(code) = code {
+            if real_code != *code {
+                return Err(Error::UserEmailUpdatingWrongCode);
+            }
         }
         let rows = transaction
             .query(&self.find_one_from_email_to_id, &[&new_email])
@@ -1433,7 +1286,7 @@ impl Query {
     }
     pub async fn resend_email_updating_email(
         &self, client: &Client,
-        app_data: web::Data<AppState>,
+        smtp: web::Data<AppSmtp>,
         sender: &str, site: &str, id: &str,
         required_uid: Option<i32>,
     ) -> Result<()> {
@@ -1459,7 +1312,7 @@ impl Query {
         }
         let message = update_user_email(sender.parse()?, email.parse()?,
                                         site, &username, &id, &code)?;
-        block(move || app_data.smtp.send(&message))
+        block(move || smtp.smtp.send(&message))
             .await?;
         Ok(())
     }

@@ -13,15 +13,24 @@ use lettre::SmtpTransport;
 use std::result::Result;
 use tokio::sync::RwLock;
 
-pub struct AppState {
+pub struct AppConfig {
     pub config: StartConfig,
+}
+
+pub struct AppDatabase {
     pub db: RwLock<tokio_postgres::Client>,
     pub query: Query,
+}
+
+pub struct AppSubscriber {
     pub subscriber: Addr<MainSubscriber>,
+}
+
+pub struct AppSmtp {
     pub smtp: SmtpTransport,
 }
 
-impl AppState {
+impl AppSubscriber {
     pub async fn send<T: Into<InnerInternalMessage>>(
         &self, message: T, auth: &Auth
     ) -> Result<(), MailboxError> {

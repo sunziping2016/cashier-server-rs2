@@ -267,6 +267,12 @@ pub async fn init_token(client: &Client) -> Result<()> {
                 acquire_method TEXT NOT NULL,\
                 acquire_host TEXT NOT NULL,\
                 acquire_remote TEXT,\
+                acquire_remote_country TEXT,\
+                acquire_remote_country_name TEXT,\
+                acquire_remote_region TEXT,\
+                acquire_remote_region_name TEXT,\
+                acquire_remote_as_number BIGINT,\
+                acquire_remote_as_name TEXT,\
                 acquire_user_agent TEXT,\
                 revoked BOOL NOT NULL\
             )", &[])

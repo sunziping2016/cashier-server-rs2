@@ -6,7 +6,7 @@ use crate::api::errors::{Result as ApiResult, ApiError};
 use crate::internal_server_error;
 use tokio_postgres::Row;
 use actix_web::web;
-use crate::api::app_state::AppState;
+use crate::api::app_state::{AppDatabase};
 use futures::FutureExt;
 use futures::future::{LocalBoxFuture, err};
 
@@ -98,7 +98,7 @@ pub fn default_process(
     projection: &str,
     table: &str,
     size: &PaginationSize,
-    app_data: web::Data<AppState>,
+    database: web::Data<AppDatabase>,
 ) -> Handler {
     let extra_condition = extra_condition.to_owned();
     let projection = projection.to_owned();
@@ -107,7 +107,7 @@ pub fn default_process(
     Box::new(move |condition, order_by, _| async move {
         let statement = format!("SELECT {} FROM {} WHERE {} AND ({}) ORDER BY {} LIMIT {}",
                                 projection, table, condition, extra_condition, order_by, size);
-        Ok(app_data.db.read().await
+        Ok(database.db.read().await
             .query(&statement[..], &[])
             .await
             .map_err(|e| internal_server_error!(e))?)

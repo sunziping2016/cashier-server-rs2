@@ -170,6 +170,12 @@ pub struct QueryConfig {
     fields: HashMap<String, FieldConfig>,
 }
 
+impl Default for QueryConfig {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl QueryConfig {
     pub fn new() -> Self {
         Self {
@@ -183,7 +189,7 @@ impl QueryConfig {
     pub fn check_sortable(&self, field: &str) -> Result<String> {
         let config = self.fields.get(field)
             .ok_or_else(|| Error::UnknownField { field: field.into() })?;
-        if config.partial_order == false {
+        if !config.partial_order {
             return Err(Error::UnsupportedOperation {
                 field: field.into(),
                 required_operation: "order".into(),
@@ -233,7 +239,7 @@ impl QueryConfig {
                 Some(field) => {
                     let config = self.fields.get(field)
                         .ok_or_else(|| Error::UnknownField { field: field.clone() })?;
-                    if config.partial_equal == false {
+                    if !config.partial_equal {
                         return Err(Error::UnsupportedOperation {
                             field: field.clone(),
                             required_operation: "equal".into(),
@@ -298,7 +304,7 @@ impl QueryConfig {
                     Some(field) => {
                         let config = self.fields.get(field)
                             .ok_or_else(|| Error::UnknownField { field: field.clone() })?;
-                        if config.partial_order == false {
+                        if !config.partial_order {
                             return Err(Error::UnsupportedOperation {
                                 field: field.clone(),
                                 required_operation: "order".into(),

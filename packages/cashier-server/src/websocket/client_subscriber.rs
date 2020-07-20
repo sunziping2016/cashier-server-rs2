@@ -8,7 +8,6 @@ use crate::{
             UserRoleCreated, RolePermissionCreated,
         },
     },
-    api::app_state::AppState,
     constants::{
         WEBSOCKET_HEARTBEAT_INTERVAL,
         WEBSOCKET_CLIENT_TIMEOUT,
@@ -36,6 +35,7 @@ use std::{
     convert::{Infallible, identity},
     borrow::Cow,
 };
+use crate::api::app_state::{AppSubscriber, AppDatabase};
 
 const MUST_INCLUDE_SUBJECT: &[&str] = &[
     "user-updated", // for block
@@ -184,7 +184,8 @@ pub struct ReloadSubjects {
 }
 
 pub struct ClientSubscriber {
-    app_data: web::Data<AppState>,
+    database: web::Data<AppDatabase>,
+    subscriber: web::Data<AppSubscriber>,
     claims: Option<Claims>,
     last_heartbeat: DateTime<Utc>,
     expire_timer: Option<SpawnHandle>,
@@ -203,9 +204,13 @@ impl fmt::Debug for ClientSubscriber {
 }
 
 impl ClientSubscriber {
-    pub fn new(app_data: &web::Data<AppState>) -> Self {
+    pub fn new(
+        database: web::Data<AppDatabase>,
+        subscriber: web::Data<AppSubscriber>,
+    ) -> Self {
         Self {
-            app_data: app_data.clone(),
+            database,
+            subscriber,
             claims: None,
             last_heartbeat: Utc::now(),
             expire_timer: None,
@@ -266,7 +271,7 @@ impl Actor for ClientSubscriber {
     }
 
     fn stopping(&mut self, ctx: &mut Self::Context) -> Running {
-        ctx.spawn(self.app_data.subscriber.send(UpdateSubscribe {
+        ctx.spawn(self.subscriber.subscriber.send(UpdateSubscribe {
             client: ctx.address().recipient(),
             subjects: HashSet::new(),
         })
@@ -432,11 +437,11 @@ impl Handler<ReloadPermissionsFromDatabase> for ClientSubscriber {
     type Result = ResponseActFuture<Self, Result<(), Infallible>>;
 
     fn handle(&mut self, msg: ReloadPermissionsFromDatabase, _ctx: &mut Self::Context) -> Self::Result {
-        let app_data = self.app_data.clone();
+        let database = self.database.clone();
         let user_id = self.claims.as_ref().map(|x| x.user_id);
         Box::new(async move {
-            app_data.query.user
-                .fetch_permission_tree(&*app_data.db.read().await, user_id)
+            database.query.user
+                .fetch_permission_tree(&*database.db.read().await, user_id)
                 .await
         }
             .into_actor(self)
@@ -537,7 +542,7 @@ impl Handler<ReloadSubjects> for ClientSubscriber {
                 .map(|x| String::from(*x))
             )
             .collect::<HashSet<_>>();
-        Box::new(self.app_data.subscriber.send(UpdateSubscribe {
+        Box::new(self.subscriber.subscriber.send(UpdateSubscribe {
             client: ctx.address().recipient(),
             subjects,
         })
@@ -658,18 +663,18 @@ impl Handler<UpdateTokenRequest> for ClientSubscriber {
     type Result = ResponseActFuture<Self, Result<UpdateTokenResponse, Infallible>>;
 
     fn handle(&mut self, msg: UpdateTokenRequest, _ctx: &mut Self::Context) -> Self::Result {
-        let app_data = self.app_data.clone();
+        let database = self.database.clone();
         Box::new(async move {
             match msg.jwt {
                 Some(token) => {
-                    let claims = app_data.query.token
-                        .verify_token(&*app_data.db.read().await, &token)
+                    let claims = database.query.token
+                        .verify_token(&*database.db.read().await, &token)
                         .await?;
-                    app_data.query.token
-                        .check_token_revoked(&*app_data.db.read().await, claims.jti)
+                    database.query.token
+                        .check_token_revoked(&*database.db.read().await, claims.jti)
                         .await?;
-                    app_data.query.user
-                        .check_user_valid_by_id(&*app_data.db.read().await, claims.uid)
+                    database.query.user
+                        .check_user_valid_by_id(&*database.db.read().await, claims.uid)
                         .await?;
                     Ok(Some(Claims {
                         user_id: claims.uid,
