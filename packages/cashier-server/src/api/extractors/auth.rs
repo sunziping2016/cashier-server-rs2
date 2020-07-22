@@ -66,38 +66,38 @@ impl FromRequest for Auth {
         async move {
             let (claims, permissions) = match auth {
                 Some(token) => {
-                    let claims = database.query.token
-                        .verify_token(&*database.db.read().await, &token)
+                    let claims = database
+                        .token_verify(&token)
                         .await
                         .map_err(|e| match e {
                             QueryError::InvalidToken { error } => ApiError::InvalidToken { error },
                             e => internal_server_error!(e),
                         })?;
-                    database.query.token
-                        .check_token_revoked(&*database.db.read().await, claims.jti)
+                    database
+                        .token_check_revoked(claims.jti)
                         .await
                         .map_err(|e| match e {
                             QueryError::TokenNotFound => ApiError::InvalidToken { error: "TokenRevoked".into() },
                             e => internal_server_error!(e),
                         })?;
-                    database.query.user
-                        .check_user_valid_by_id(&*database.db.read().await, claims.uid)
+                    database
+                        .user_check_blocked(claims.uid)
                         .await
                         .map_err(|e| match e {
                             QueryError::UserNotFound => ApiError::InvalidToken { error: "InvalidUser".into() },
                             QueryError::UserBlocked => ApiError::InvalidToken { error: "UserBlocked".into() },
                             e => internal_server_error!(e),
                         })?;
-                    let permissions = database.query.user
-                        .fetch_permission(&*database.db.read().await, claims.uid)
+                    let permissions = database
+                        .user_fetch_permissions(claims.uid)
                         .await
                         .map_err(|e| internal_server_error!(e))?;
                     (Some(claims), permissions)
                 }
                 None => (
                     None,
-                    database.query.user
-                        .fetch_default_permission(&*database.db.read().await)
+                    database
+                        .user_fetch_default_permissions()
                         .await
                         .map_err(|e| internal_server_error!(e))?,
                 )

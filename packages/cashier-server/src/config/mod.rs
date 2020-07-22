@@ -70,7 +70,7 @@ pub struct StartConfig {
 #[derive(Debug, Clone)]
 pub enum Config {
     Init(InitConfig),
-    Start(StartConfig),
+    Start(Box<StartConfig>),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -80,8 +80,8 @@ pub struct MediaConfigFile {
     serve: Option<bool>,
 }
 
-impl MediaConfigFile {
-    pub fn new() -> Self {
+impl Default for MediaConfigFile {
+    fn default() -> Self {
         Self {
             root: None,
             url: None,
@@ -98,8 +98,8 @@ pub struct SmtpConfigFile {
     pub password: Option<String>,
 }
 
-impl SmtpConfigFile {
-    pub fn new() -> Self {
+impl Default for SmtpConfigFile {
+    fn default() -> Self {
         Self {
             server: None,
             sender: None,
@@ -118,8 +118,8 @@ pub struct GeoIpConfigFile {
     pub city_v6: Option<String>,
 }
 
-impl GeoIpConfigFile {
-    pub fn new() -> Self {
+impl Default for GeoIpConfigFile {
+    fn default() -> Self {
         Self {
             asn: None,
             asn_v6: None,
@@ -141,8 +141,8 @@ pub struct ConfigFile {
     geoip: Option<GeoIpConfigFile>,
 }
 
-impl ConfigFile {
-    pub fn new() -> Self {
+impl Default for ConfigFile {
+    fn default() -> Self {
         Self {
             db: None,
             redis: None,
@@ -153,7 +153,9 @@ impl ConfigFile {
             geoip: None,
         }
     }
+}
 
+impl ConfigFile {
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self, ConfigError> {
         let json = File::open(path)?;
         Ok(serde_json::from_reader(&json)?)
@@ -263,7 +265,7 @@ impl Config {
             .subcommand(App::new("start")
                 .about("Starts the server"))
             .get_matches_from(itr);
-        let mut config_file = ConfigFile::new();
+        let mut config_file = ConfigFile::default();
         if let Some(path) = matches.value_of("config") {
             config_file = ConfigFile::load(path)?;
         }
@@ -271,38 +273,38 @@ impl Config {
         config_file.redis = matches.value_of("redis").map(String::from).or(config_file.redis);
         config_file.bind = matches.value_of("bind").map(String::from).or(config_file.bind);
         config_file.site = matches.value_of("site").map(String::from).or(config_file.site);
-        let mut default_media_config_file = MediaConfigFile::new();
+        let mut default_media_config_file = MediaConfigFile::default();
         let media_config_file = config_file.media.as_mut()
             .unwrap_or(&mut default_media_config_file);
         media_config_file.root = matches.value_of("media-root").map(String::from)
-            .or(media_config_file.root.clone());
+            .or_else(|| media_config_file.root.clone());
         media_config_file.url = matches.value_of("media-url").map(String::from)
-            .or(media_config_file.url.clone());
+            .or_else(|| media_config_file.url.clone());
         if matches.is_present("media-serve") {
             media_config_file.serve = Some(true);
         }
-        let mut default_smtp_config_file = SmtpConfigFile::new();
+        let mut default_smtp_config_file = SmtpConfigFile::default();
         let smtp_config_file = config_file.smtp.as_mut()
             .unwrap_or(&mut default_smtp_config_file);
         smtp_config_file.server = matches.value_of("smtp-server").map(String::from)
-            .or(smtp_config_file.server.clone());
+            .or_else(|| smtp_config_file.server.clone());
         smtp_config_file.sender = matches.value_of("smtp-sender").map(String::from)
-            .or(smtp_config_file.sender.clone());
+            .or_else(|| smtp_config_file.sender.clone());
         smtp_config_file.username = matches.value_of("smtp-username").map(String::from)
-            .or(smtp_config_file.username.clone());
+            .or_else(|| smtp_config_file.username.clone());
         smtp_config_file.password = matches.value_of("smtp-password").map(String::from)
-            .or(smtp_config_file.password.clone());
-        let mut default_geoip_config_file = GeoIpConfigFile::new();
+            .or_else(|| smtp_config_file.password.clone());
+        let mut default_geoip_config_file = GeoIpConfigFile::default();
         let geoip_config_file = config_file.geoip.as_mut()
             .unwrap_or(&mut default_geoip_config_file);
         geoip_config_file.asn = matches.value_of("geoip-asn").map(String::from)
-            .or(geoip_config_file.asn.clone());
+            .or_else(|| geoip_config_file.asn.clone());
         geoip_config_file.asn_v6 = matches.value_of("geoip-asn-v6").map(String::from)
-            .or(geoip_config_file.asn_v6.clone());
+            .or_else(|| geoip_config_file.asn_v6.clone());
         geoip_config_file.city = matches.value_of("geoip-city").map(String::from)
-            .or(geoip_config_file.city.clone());
+            .or_else(|| geoip_config_file.city.clone());
         geoip_config_file.city_v6 = matches.value_of("geoip-city-v6").map(String::from)
-            .or(geoip_config_file.city_v6.clone());
+            .or_else(|| geoip_config_file.city_v6.clone());
         match matches.subcommand() {
             ("init", Some(sub_matches)) => Ok(Config::Init(InitConfig {
                 db: config_file.db
@@ -313,7 +315,7 @@ impl Config {
                 superuser_username: sub_matches.value_of("superuser-username").map(String::from),
                 superuser_password: sub_matches.value_of("superuser-password").map(String::from),
             })),
-            ("start", Some(_)) => Ok(Config::Start(StartConfig {
+            ("start", Some(_)) => Ok(Config::Start(Box::new(StartConfig {
                 db: config_file.db
                     .ok_or_else(|| ConfigError::MissingArgument("database".into()))?,
                 redis: config_file.redis
@@ -343,7 +345,7 @@ impl Config {
                     city: geoip_config_file.city.clone(),
                     city_v6: geoip_config_file.city_v6.clone(),
                 },
-            })),
+            }))),
             _ => Err(ConfigError::InvalidSubcommand)
         }
     }

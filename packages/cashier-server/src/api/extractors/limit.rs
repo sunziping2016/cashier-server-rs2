@@ -79,9 +79,8 @@ impl<S, B> Service for SayHiMiddleware<S>
         Box::pin(async move {
             match remote {
                 Some(remote) => {
-                    match database.query.limit
-                        .try_acquire_token(&mut *database.db.write().await, &subject, &remote,
-                                           burst, rate, reset_on_fail)
+                    match database
+                        .limit_try_acquire_token(&subject, &remote, burst, rate, reset_on_fail)
                         .await {
                         Ok(success) => if !success {
                             return Ok(req.into_response(ApiError::TooManyRequests {

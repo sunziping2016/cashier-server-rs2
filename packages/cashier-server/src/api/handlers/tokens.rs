@@ -34,7 +34,7 @@ use validator_derive::Validate;
 use cashier_query::generator::{QueryConfig, FieldConfig};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use crate::api::cursor::{process_query, default_process};
-use crate::queries::tokens::TokenIdUser;
+use crate::queries::tokens::{TokenIdUser, CreateTokenInfo};
 use crate::api::extractors::config::default_password_rate_limit;
 use crate::api::app_state::{AppSubscriber, AppConfig};
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -97,10 +97,16 @@ async fn acquire_token_impl_impl(
             (None, None)
         }
     } else { (None, None) };
-    let (jwt, claims) = database.query.token
-        .create_token(&*database.db.read().await, uid, method,
-                      connection_info.host(), connection_info.remote(),
-                      user_agent, &city_info, &as_info)
+    let (jwt, claims) = database
+        .token_create(CreateTokenInfo {
+            user: uid,
+            method,
+            host: connection_info.host(),
+            remote: connection_info.remote(),
+            user_agent,
+            city_info: &city_info,
+            as_info: &as_info,
+        })
         .await
         .map_err(|e| internal_server_error!(e))?;
     Ok((AcquireTokenResponse {
@@ -149,9 +155,8 @@ async fn acquire_token_by_username(
     req: web::HttpRequest,
 ) -> ApiResult<AcquireTokenResponse> {
     auth.try_permission("token", "acquire-by-username")?;
-    let uid = database.query.user
-        .check_user_valid(&*database.db.read().await,
-                          &EitherUsernameOrEmail::Username(data.username.clone().into()),
+    let uid = database
+        .user_check_valid(&EitherUsernameOrEmail::Username(data.username.clone().into()),
                           &data.password[..])
         .await
         .map_err(|e| match e {
@@ -180,9 +185,8 @@ async fn acquire_token_by_email(
     req: web::HttpRequest,
 ) -> ApiResult<AcquireTokenResponse> {
     auth.try_permission("token", "acquire-by-email")?;
-    let uid = database.query.user
-        .check_user_valid(&*database.db.read().await,
-                          &EitherUsernameOrEmail::Email(data.email.clone().into()),
+    let uid = database
+        .user_check_valid(&EitherUsernameOrEmail::Email(data.email.clone().into()),
                           &data.password[..])
         .await
         .map_err(|e| match e {
@@ -202,8 +206,8 @@ async fn resume_token(
 ) -> ApiResult<AcquireTokenResponse> {
     auth.try_permission("token", "resume")?;
     let claims = auth.claims.as_ref().ok_or_else(|| ApiError::MissingAuthorizationHeader)?;
-    database.query.token
-        .revoke_token(&*database.db.read().await, claims.jti, None)
+    database
+        .token_revoke(claims.jti, None)
         .await
         .map_err(|e| internal_server_error!(e))?;
     let (response, msg) = acquire_token_impl_impl(
@@ -425,8 +429,8 @@ async fn revoke_single_token_impl(
     jti: i32,
     uid: Option<i32>,
 ) -> ApiResult<()> {
-    let result = database.query.token
-        .revoke_token(&*database.db.read().await, jti, uid)
+    let result = database
+        .token_revoke(jti, uid)
         .await
         .map_err(|err| match err {
             QueryError::TokenNotFound => ApiError::TokenNotFound,
@@ -484,8 +488,8 @@ async fn read_token_impl(
     jti: i32,
     uid: Option<i32>,
 ) -> ApiResult<ReadTokenResponse> {
-    let token = database.query.token
-        .read_token(&*database.db.read().await, jti, uid)
+    let token = database
+        .token_read(jti, uid)
         .await
         .map_err(|err| match err {
             QueryError::TokenNotFound => ApiError::TokenNotFound,
@@ -539,7 +543,7 @@ pub fn tokens_api(
                     )
                     .service(
                         web::scope("acquire-by-email")
-                            .wrap(default_password_rate_limit(database.clone()))
+                            .wrap(default_password_rate_limit(database))
                             .route("", web::post().to(acquire_token_by_email))
                     )
                     .route("/resume", web::post().to(resume_token))

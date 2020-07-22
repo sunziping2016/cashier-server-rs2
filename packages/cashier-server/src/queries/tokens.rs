@@ -10,6 +10,7 @@ use crate::api::cursor::{Result as CursorResult, Cursor, PrimaryCursor};
 use std::borrow::Borrow;
 use geoip::{CityInfo, ASInfo};
 use std::convert::TryFrom;
+use crate::queries::AppDatabase;
 
 pub struct Query {
     create_token: Statement,
@@ -126,6 +127,16 @@ pub struct TokenIdUser {
     pub user: i32,
 }
 
+pub struct CreateTokenInfo<'a> {
+    pub user: i32,
+    pub method: &'a str,
+    pub host: &'a str,
+    pub remote: Option<&'a str>,
+    pub user_agent: Option<&'a str>,
+    pub city_info: &'a Option<CityInfo>,
+    pub as_info: &'a Option<ASInfo>,
+}
+
 impl Query {
     pub async fn new(client: &Client) -> Self {
         let create_token = client.prepare_typed(
@@ -194,13 +205,17 @@ impl Query {
             revoke_tokens_from_user,
         }
     }
-    pub async fn create_token(
-        &self, client: &Client, user: i32, method: &str,
-        host: &str, remote: Option<&str>, user_agent: Option<&str>,
-        city_info: &Option<CityInfo>, as_info: &Option<ASInfo>,
+}
+
+impl AppDatabase {
+    pub async fn token_create(
+        &self, info: CreateTokenInfo<'_>,
     ) -> Result<(String, JwtClaims)> {
-        let row = client
-            .query_one(&self.create_token, &[
+        let CreateTokenInfo { user, method, host,
+            remote, user_agent,
+            city_info, as_info } = info;
+        let row = self.db.read().await
+            .query_one(&self.token.create_token, &[
                 &user, &method, &host, &remote,
                 &city_info.as_ref().map(|x| x.country_code.clone()).flatten(),
                 &city_info.as_ref().map(|x| x.country_name.clone()).flatten(),
@@ -220,37 +235,38 @@ impl Query {
             exp: expires_at.timestamp(),
             jti: id,
         };
-        let secret = self.get_secret(client).await?;
+        let secret = self.token_get_secret().await?;
         let jwt = encode(&Header::default(), &claims, &EncodingKey::from_secret(&secret))?;
         Ok((jwt, claims))
     }
-    pub async fn get_secret(&self, client: &Client) -> Result<Vec<u8>> {
-        let row = client.query_one(&self.get_secret, &[]).await?;
+    pub async fn token_get_secret(&self) -> Result<Vec<u8>> {
+        let row = self.db.read().await
+            .query_one(&self.token.get_secret, &[]).await?;
         Ok(row.get("jwt_secret"))
     }
-    pub async fn verify_token(&self, client: &Client, token: &str) -> Result<JwtClaims> {
-        let secret = self.get_secret(client).await?;
+    pub async fn token_verify(&self, token: &str) -> Result<JwtClaims> {
+        let secret = self.token_get_secret().await?;
         let claims = decode::<JwtClaims>(&token, &DecodingKey::from_secret(&secret), &Validation::default())
             .map_err(|err| Error::InvalidToken { error: format!("{:?}", err.into_kind()) })?
             .claims;
         Ok(claims)
     }
-    pub async fn check_token_revoked(&self, client: &Client, id: i32) -> Result<()> {
-        let rows = client
-            .query(&self.check_token_revoked, &[&id])
+    pub async fn token_check_revoked(&self, id: i32) -> Result<()> {
+        let rows = self.db.read().await
+            .query(&self.token.check_token_revoked, &[&id])
             .await?;
         if rows.is_empty() {
             return Err(Error::TokenNotFound);
         }
         Ok(())
     }
-    pub async fn revoke_token(&self, client: &Client, id: i32, uid: Option<i32>) -> Result<TokenIdUser> {
+    pub async fn token_revoke(&self, id: i32, uid: Option<i32>) -> Result<TokenIdUser> {
         let rows = match uid {
-            Some(uid) => client
-                .query(&self.revoke_token_with_uid, &[&id, &uid])
+            Some(uid) => self.db.read().await
+                .query(&self.token.revoke_token_with_uid, &[&id, &uid])
                 .await?,
-            None => client
-                .query(&self.revoke_token, &[&id])
+            None => self.db.read().await
+                .query(&self.token.revoke_token, &[&id])
                 .await?,
         };
         let row = rows
@@ -261,13 +277,13 @@ impl Query {
             user: row.get("user"),
         })
     }
-    pub async fn read_token(&self, client: &Client, id: i32, uid: Option<i32>) -> Result<Token> {
+    pub async fn token_read(&self, id: i32, uid: Option<i32>) -> Result<Token> {
         let rows = match uid {
-            Some(uid) => client
-                .query(&self.read_token_with_uid, &[&id, &uid])
+            Some(uid) => self.db.read().await
+                .query(&self.token.read_token_with_uid, &[&id, &uid])
                 .await?,
-            None => client
-                .query(&self.read_token, &[&id])
+            None => self.db.read().await
+                .query(&self.token.read_token, &[&id])
                 .await?,
         };
         let row = rows
@@ -275,9 +291,9 @@ impl Query {
             .ok_or_else(|| Error::TokenNotFound)?;
         Ok(Token::from(row))
     }
-    pub async fn revoke_tokens_from_user(&self, client: &Client, user: i32) -> Result<Vec<TokenIdUser>> {
-        let rows = client
-            .query(&self.revoke_tokens_from_user, &[&user])
+    pub async fn token_revoke_by_user(&self, user: i32) -> Result<Vec<TokenIdUser>> {
+        let rows = self.db.read().await
+            .query(&self.token.revoke_tokens_from_user, &[&user])
             .await?;
         let results = rows.iter()
             .map(|row| TokenIdUser {

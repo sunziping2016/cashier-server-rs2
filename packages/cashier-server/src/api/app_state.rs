@@ -1,6 +1,5 @@
 use crate::{
     config::StartConfig,
-    queries::Query,
     websocket::{
         main_subscriber::MainSubscriber,
         push_messages::{InternalMessage, InnerInternalMessage}
@@ -11,15 +10,11 @@ use actix::{Addr, MailboxError};
 use chrono::Utc;
 use lettre::SmtpTransport;
 use std::result::Result;
-use tokio::sync::RwLock;
+
+pub use crate::queries::AppDatabase;
 
 pub struct AppConfig {
     pub config: StartConfig,
-}
-
-pub struct AppDatabase {
-    pub db: RwLock<tokio_postgres::Client>,
-    pub query: Query,
 }
 
 pub struct AppSubscriber {

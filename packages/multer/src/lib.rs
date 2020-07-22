@@ -16,6 +16,7 @@ use std::{
     fmt,
 };
 use tokio::stream::StreamExt;
+use std::borrow::Borrow;
 
 #[derive(Debug)]
 pub struct FieldName(Option<String>);
@@ -115,8 +116,8 @@ pub struct FieldConfig {
     handler: Option<Handler>,
 }
 
-impl FieldConfig {
-    pub fn new() -> Self {
+impl Default for FieldConfig {
+    fn default() -> Self {
         Self {
             accept_content_type: None,
             accept_file: None,
@@ -125,6 +126,9 @@ impl FieldConfig {
             handler: None,
         }
     }
+}
+
+impl FieldConfig {
     pub fn handler(mut self, handler: Handler) -> Self {
         self.handler = Some(handler);
         self
@@ -208,8 +212,8 @@ impl FieldResult {
     pub fn filename(&self) -> &Option<String> {
         &self.filename
     }
-    pub fn extra(&self) -> &Box<dyn FieldResultExtra + std::marker::Send> {
-        &self.extra
+    pub fn extra(&self) -> &(dyn FieldResultExtra + std::marker::Send) {
+        self.extra.borrow()
     }
     pub fn extra_mut(&mut self) -> &mut Box<dyn FieldResultExtra + std::marker::Send> {
         &mut self.extra

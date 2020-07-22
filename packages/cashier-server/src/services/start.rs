@@ -4,7 +4,6 @@ use crate::{
         app_state::{AppConfig, AppSubscriber, AppSmtp, AppDatabase},
     },
     config::StartConfig,
-    queries::Query,
     websocket::main_subscriber::MainSubscriber,
 };
 use actix::Actor;
@@ -22,7 +21,6 @@ use lettre::{
 use log::error;
 use redis::RedisError;
 use rustls::ClientConfig;
-use tokio::sync::RwLock;
 use tokio_postgres::{
     Error as PostgresError,
     NoTls,
@@ -48,7 +46,6 @@ pub async fn start(config: &StartConfig) -> Result<()> {
             error!("connection error: {}", e);
         }
     });
-    let query = Query::new(&client).await;
     let redis_client = redis::Client::open(&config.redis[..])?;
     let redis_connection = redis_client.get_async_connection().await?;
     let subscriber = MainSubscriber::new(
@@ -74,13 +71,10 @@ pub async fn start(config: &StartConfig) -> Result<()> {
     )))
         .build();
 
-    let app_state = web::Data::new(AppConfig {
+    let app_config = web::Data::new(AppConfig {
         config: config.clone(),
     });
-    let app_database = web::Data::new(AppDatabase {
-        db: RwLock::from(client),
-        query,
-    });
+    let app_database = web::Data::new(AppDatabase::new(client).await);
     let app_subscriber = web::Data::new(AppSubscriber {
         subscriber,
     });
@@ -94,7 +88,7 @@ pub async fn start(config: &StartConfig) -> Result<()> {
         let mut app = App::new()
             .wrap(Logger::default())
             .configure(api_v1(
-                &app_state,
+                &app_config,
                 &app_database,
                 &app_subscriber,
                 &app_smtp,

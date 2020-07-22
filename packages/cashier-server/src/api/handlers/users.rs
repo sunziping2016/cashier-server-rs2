@@ -59,7 +59,7 @@ use validator_derive::Validate;
 use cashier_query::generator::{QueryConfig, FieldConfig, escape_unquoted};
 use lazy_static::lazy_static;
 use crate::api::fields::PaginationSize;
-use crate::queries::users::{UserCursor, UserAll};
+use crate::queries::users::{UserCursor, UserAll, UserRegisterInfo};
 use crate::api::cursor::process_query;
 use futures::FutureExt;
 use crate::api::extractors::config::default_confirm_rate_limit;
@@ -97,8 +97,8 @@ async fn create_user(
         .map(|x| x.clone().into())
         .collect::<Vec<_>>();
     roles.dedup();
-    let extra_roles = database.query.user
-        .check_extra_roles(&*database.db.read().await, uid, &roles[..])
+    let extra_roles = database
+        .user_check_extra_roles(uid, &roles[..])
         .await
         .map_err(|e| internal_server_error!(e))?;
     if !extra_roles.is_empty() {
@@ -106,10 +106,9 @@ async fn create_user(
     }
     let email = data.email.as_ref().map(|x| x.clone().into());
     let nickname = data.nickname.as_ref().map(|x| x.clone().into());
-    let user = database.query.user
-        .insert_one(&mut *database.db.write().await,
-                    &data.username[..], &data.password[..], &roles[..],
-                    &email, &nickname)
+    let user = database
+        .user_insert_one(&data.username[..], &data.password[..], &roles[..],
+                         &email, &nickname)
         .await
         .map_err(|err| match err {
             QueryError::DuplicatedUser { field } => ApiError::DuplicatedUser { field },
@@ -167,8 +166,8 @@ async fn upload_avatar_impl(
     auth: &Auth,
 ) -> ApiResult<UploadAvatarResponse> {
     // Fetch old avatars
-    let old_avatars = database.query.user
-        .fetch_avatars(&*database.db.read().await, uid)
+    let old_avatars = database
+        .user_fetch_avatars(uid)
         .await
         .map_err(|err| match err {
             QueryError::UserNotFound => ApiError::UserNotFound,
@@ -214,8 +213,8 @@ async fn upload_avatar_impl(
             e => internal_server_error!(e),
         })?;
     // Save new avatars to database
-    let updated_at = match database.query.user
-        .update_avatars(&*database.db.read().await, uid, &Some(avatar.clone()), &avatar128)
+    let updated_at = match database
+        .user_update_avatars(uid, &Some(avatar.clone()), &avatar128)
         .await {
         Ok(v) => v,
         Err(e) => {
@@ -300,16 +299,16 @@ async fn delete_avatar_impl(
     auth: &Auth,
 ) -> ApiResult<()> {
     // Fetch old avatars
-    let old_avatars = database.query.user
-        .fetch_avatars(&*database.db.read().await, uid)
+    let old_avatars = database
+        .user_fetch_avatars(uid)
         .await
         .map_err(|err| match err {
             QueryError::UserNotFound => ApiError::UserNotFound,
             e => internal_server_error!(e),
         })?;
     // Save new avatars to database
-    let updated_at = database.query.user
-        .update_avatars(&*database.db.read().await, uid, &None, &None)
+    let updated_at = database
+        .user_update_avatars(uid, &None, &None)
         .await
         .map_err(|err| match err {
             QueryError::UserNotFound => ApiError::UserNotFound,
@@ -372,10 +371,8 @@ async fn read_user_impl(
     database: web::Data<AppDatabase>,
     uid: i32,
 ) -> ApiResult<ReadUserResponse> {
-    let mut user = User::All(database.query.user
-        .find_one_all(
-            &mut *database.db.write().await, uid
-        )
+    let mut user = User::All(database
+        .user_find_one(uid)
         .await
         .map_err(|err| match err {
             QueryError::UserNotFound => ApiError::UserNotFound,
@@ -417,10 +414,8 @@ async fn read_user_public(
 ) -> ApiResult<ReadUserResponse> {
     auth.try_permission("user-public", "read")?;
     let uid = uid_path.uid.clone().into();
-    let mut user = User::Public(database.query.user
-        .find_one_public(
-            &mut *database.db.write().await, uid
-        )
+    let mut user = User::Public(database
+        .user_find_one_public(uid)
         .await
         .map_err(|err| match err {
             QueryError::UserNotFound => ApiError::UserNotFound,
@@ -458,12 +453,14 @@ async fn register_user(
     auth: Auth,
 ) -> ApiResult<RegisterUserResponse> {
     auth.try_permission("registration", "create")?;
-    let result = database.query.user
-        .register_user(
-            &*database.db.read().await, smtp,
-            &config.config.smtp.sender, &config.config.site,
-            &request.username[..], &request.email[..], &request.password[..],
-        )
+    let result = database
+        .user_register(smtp,
+                       &config.config.smtp.sender, &config.config.site,
+                       UserRegisterInfo {
+                           username: &request.username[..],
+                           email: &request.email[..],
+                           password: &request.password[..],
+                       })
         .await
         .map_err(|err| match err {
             QueryError::DuplicatedUser { field } => ApiError::DuplicatedUser { field },
@@ -495,9 +492,8 @@ async fn confirm_registration_impl(
     code: &Option<String>,
     auth: &Auth,
 ) -> ApiResult<()> {
-    let result = database.query.user
-        .confirm_registration(&mut *database.db.write().await,
-                              reg_id, code)
+    let result = database
+        .user_confirm_registration(reg_id, code)
         .await
         .map_err(|err| match err {
             QueryError::UserRegistrationNotFound => ApiError::UserRegistration { reason: "NotFound".into() },
@@ -563,8 +559,8 @@ async fn check_username_existence(
     auth: Auth,
 ) -> ApiResult<CheckExistenceResponse> {
     auth.try_permission("user-username", "check-existence")?;
-    let exists = database.query.user
-        .check_username_existence(&*database.db.read().await, &request.username[..])
+    let exists = database
+        .user_check_username_existence(&request.username[..])
         .await
         .map_err(|e| internal_server_error!(e))?;
     respond(CheckExistenceResponse {
@@ -578,8 +574,8 @@ async fn check_email_existence(
     auth: Auth,
 ) -> ApiResult<CheckExistenceResponse> {
     auth.try_permission("user-username", "check-existence")?;
-    let exists = database.query.user
-        .check_email_existence(&*database.db.read().await, &request.email[..])
+    let exists = database
+        .user_check_email_existence(&request.email[..])
         .await
         .map_err(|e| internal_server_error!(e))?;
     respond(CheckExistenceResponse {
@@ -603,8 +599,8 @@ async fn query_registration(
     auth: Auth,
 ) -> ApiResult<QueryRegistrationResponse> {
     auth.try_permission("registration", "read")?;
-    let result = match database.query.user
-        .query_registration(&*database.db.read().await, &path.reg_id[..])
+    let result = match database
+        .user_query_registration(&path.reg_id[..])
         .await {
         Ok(value) => match value.completed {
             Some(true) => QueryRegistrationResponse::Passed(value),
@@ -626,10 +622,9 @@ async fn resend_registration_email(
     auth: Auth,
 ) -> ApiResult<()> {
     auth.try_permission("registration", "resend")?;
-    database.query.user
-        .resend_registration_email(
-            &*database.db.read().await, smtp,
-            &config.config.smtp.sender, &config.config.site,
+    database
+        .user_resend_registration_email(
+            smtp, &config.config.smtp.sender, &config.config.site,
             &path.reg_id[..])
         .await
         .map_err(|err| match err {
@@ -671,22 +666,26 @@ struct UpdateSelfRequest {
     pub nickname: Option<Option<Nickname>>,
 }
 
-async fn update_user_impl(
-    database: web::Data<AppDatabase>,
-    subscriber: web::Data<AppSubscriber>,
-    auth: &Auth,
+struct UpdateUserInfo {
     uid: i32,
     username: Option<Username>,
     email: Option<Option<Email>>,
     nickname: Option<Option<Nickname>>,
     blocked: Option<Option<bool>>,
+}
+
+async fn update_user_impl(
+    database: web::Data<AppDatabase>,
+    subscriber: web::Data<AppSubscriber>,
+    auth: &Auth,
+    info: UpdateUserInfo,
 ) -> ApiResult<()> {
+    let UpdateUserInfo { uid, username, email, nickname, blocked } = info;
     let username = username.map(|x| x.into());
     let email = email.map(|x| x.map(|x| x.into()));
     let nickname = nickname.map(|x| x.map(|x| x.into()));
-    let updated_at = database.query.user
-        .update_user(&mut *database.db.write().await, uid, &username,
-                     &email, &nickname, &blocked)
+    let updated_at = database
+        .user_update(info.uid, &username, &email, &nickname, &blocked)
         .await
         .map_err(|err| match err {
             QueryError::UserNotFound => ApiError::UserNotFound,
@@ -717,8 +716,13 @@ async fn update_user_for_me(
 ) -> ApiResult<()> {
     auth.try_permission("user", "update-self")?;
     let uid = auth.claims.as_ref().ok_or_else(|| ApiError::MissingAuthorizationHeader)?.uid;
-    update_user_impl(database, subscriber, &auth, uid, request.username.clone(), None,
-                     request.nickname.clone(), None).await
+    update_user_impl(database, subscriber, &auth, UpdateUserInfo {
+        uid,
+        username: request.username.clone(),
+        email: None,
+        nickname: request.nickname.clone(),
+        blocked: None,
+    }).await
 }
 
 async fn update_user(
@@ -730,8 +734,13 @@ async fn update_user(
 ) -> ApiResult<()> {
     auth.try_permission("user", "update")?;
     let uid = uid_path.uid.clone().into();
-    update_user_impl(database, subscriber, &auth, uid, request.username.clone(), request.email.clone(),
-                     request.nickname.clone(), request.blocked.clone()).await
+    update_user_impl(database, subscriber, &auth, UpdateUserInfo {
+        uid,
+        username: request.username.clone(),
+        email: request.email.clone(),
+        nickname: request.nickname.clone(),
+        blocked: request.blocked,
+    }).await
 }
 
 #[derive(Debug, Validate, Deserialize)]
@@ -757,10 +766,9 @@ async fn update_user_email(
 ) -> ApiResult<UpdateEmailResponse> {
     auth.try_permission("user-email-updating", "create")?;
     let uid = auth.claims.as_ref().ok_or_else(|| ApiError::MissingAuthorizationHeader)?.uid;
-    let result = database.query.user
-        .update_email(
-            &*database.db.read().await, smtp,
-            &config.config.smtp.sender, &config.config.site,
+    let result = database
+        .user_update_email(
+            smtp, &config.config.smtp.sender, &config.config.site,
             uid, &request.email[..],
         )
         .await
@@ -797,8 +805,8 @@ async fn query_email_updating_impl(
     updated_id: &str,
     uid: Option<i32>
 ) -> ApiResult<QueryEmailUpdatingResponse> {
-    let result = match database.query.user
-        .query_email_updating(&*database.db.read().await, updated_id, uid)
+    let result = match database
+        .user_query_email_updating(updated_id, uid)
         .await {
         Ok(value) => {
             match value.completed {
@@ -852,9 +860,8 @@ async fn confirm_email_updating_impl(
     code: &Option<String>,
     uid: &Option<i32>
 ) -> ApiResult<()> {
-    let result = database.query.user
-        .confirm_email_updating(&mut *database.db.write().await,
-                                update_id, code, uid)
+    let result = database
+        .user_confirm_email_updating(update_id, code, uid)
         .await
         .map_err(|err| match err {
             QueryError::UserEmailUpdatingNotFound => ApiError::UserEmailUpdating { reason: "NotFound".into() },
@@ -913,10 +920,9 @@ async fn resend_email_updating_email_impl(
     update_id: &str,
     uid: Option<i32>,
 ) -> ApiResult<()> {
-    database.query.user
-        .resend_email_updating_email(
-            &*database.db.read().await, smtp,
-            &config.config.smtp.sender, &config.config.site,
+    database
+        .user_resend_email_updating_email(
+            smtp, &config.config.smtp.sender, &config.config.site,
             update_id, uid)
         .await
         .map_err(|err| match err {
@@ -962,17 +968,16 @@ async fn update_password_impl(
     password: String,
     old_password: Option<String>,
 ) -> ApiResult<()> {
-    let updated_at = database.query.user
-        .update_password(&mut *database.db.write().await, uid,
-                         password, old_password)
+    let updated_at = database
+        .user_update_password(uid, password, old_password)
         .await
         .map_err(|err| match err {
             QueryError::UserNotFound => ApiError::UserNotFound,
             QueryError::WrongPassword => ApiError::WrongUserOrPassword,
             e => internal_server_error!(e),
         })?;
-    let results = database.query.token
-        .revoke_tokens_from_user(&*database.db.read().await, uid)
+    let results = database
+        .token_revoke_by_user(uid)
         .await
         .map_err(|e| internal_server_error!(e))?;
     subscriber.send_all(
@@ -1190,7 +1195,7 @@ pub fn users_api(
                         .app_data(config.clone())
                         .app_data(database.clone())
                         .app_data(subscriber.clone())
-                        .app_data(smtp.clone())
+                        .app_data(smtp)
                         .app_data(default_json_config())
                         .app_data(default_path_config())
                         .app_data(default_query_config())

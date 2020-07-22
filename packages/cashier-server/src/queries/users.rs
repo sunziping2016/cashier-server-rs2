@@ -16,6 +16,7 @@ use tokio_postgres::{
 use crate::api::app_state::AppSmtp;
 use crate::api::cursor::{Result as CursorResult, Cursor, PrimaryCursor};
 use std::borrow::Borrow;
+use crate::queries::AppDatabase;
 
 struct Digit;
 
@@ -32,6 +33,16 @@ pub struct UserIdPasswordBlocked {
     pub id: i32,
     pub password: String,
     pub blocked: Option<bool>,
+}
+
+impl From<&Row> for UserIdPasswordBlocked {
+    fn from(row: &Row) -> Self {
+        Self {
+            id: row.get("id"),
+            password: row.get("password"),
+            blocked: row.get("blocked"),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -450,51 +461,49 @@ impl From<&Row> for UserEmailUpdatingPublic {
 }
 
 pub struct Query {
-    find_one_from_username_to_id_password_blocked: Statement,
-    find_one_from_email_to_id_password_blocked: Statement,
-    find_one_from_username_to_id: Statement,
-    find_one_from_email_to_id: Statement,
-    check_user_blocked: Statement,
-    fetch_permission: Statement,
-    fetch_default_permission: Statement,
-    check_extra_roles: Statement,
-    find_one_from_username_to_username_email: Statement,
-    find_one_from_username_email_to_username_email: Statement,
-    insert_one: Statement,
-    insert_one_roles: Statement,
-    fetch_avatars: Statement,
-    update_avatars: Statement,
-    find_one_with_roles: Statement,
-    find_one_public: Statement,
-    find_one_to_username: Statement,
-    fetch_permission_tree: Statement,
-    fetch_default_permission_tree: Statement,
-    insert_one_into_user_registration: Statement,
-    find_one_from_user_registration: Statement,
-    find_one_from_user_registration_without_password: Statement,
-    insert_one_registered_user: Statement,
-    find_default_roles: Statement,
-    complete_registration: Statement,
-    query_registration: Statement,
-    update_user: Statement,
-    insert_one_into_user_email_updating: Statement,
-    find_one_from_user_email_updating: Statement,
-    find_one_from_user_email_updating_join_user: Statement,
-    update_email: Statement,
-    complete_email_updating: Statement,
-    query_email_updating: Statement,
-    find_one_to_password: Statement,
-    update_password: Statement,
+    pub find_one_from_username_to_password: Statement,
+    pub find_one_from_email_to_password: Statement,
+    pub find_one_from_username_to_id: Statement,
+    pub find_one_from_email_to_id: Statement,
+    pub check_blocked: Statement,
+    pub fetch_permissions: Statement,
+    pub fetch_default_permissions: Statement,
+    pub check_extra_roles: Statement,
+    pub insert_one: Statement,
+    pub insert_one_roles: Statement,
+    pub fetch_avatars: Statement,
+    pub update_avatars: Statement,
+    pub find_one_with_roles: Statement,
+    pub find_one_public: Statement,
+    pub find_one_to_username: Statement,
+    pub fetch_permission_tree: Statement,
+    pub fetch_default_permission_tree: Statement,
+    pub insert_one_into_user_registration: Statement,
+    pub find_one_from_user_registration: Statement,
+    pub find_one_from_user_registration_without_password: Statement,
+    pub insert_one_registered_user: Statement,
+    pub find_default_roles: Statement,
+    pub complete_registration: Statement,
+    pub query_registration: Statement,
+    pub update_user: Statement,
+    pub insert_one_into_user_email_updating: Statement,
+    pub find_one_from_user_email_updating: Statement,
+    pub find_one_from_user_email_updating_join_user: Statement,
+    pub update_email: Statement,
+    pub complete_email_updating: Statement,
+    pub query_email_updating: Statement,
+    pub find_one_to_password: Statement,
+    pub update_password: Statement,
 }
 
 impl Query {
     pub async fn new(client: &Client) -> Self {
-        let find_one_from_username_to_id_password_blocked = client.prepare_typed(
+        let find_one_from_username_to_password = client.prepare_typed(
             "SELECT id, password, blocked FROM \"user\" \
                 WHERE username = $1 AND NOT deleted LIMIT 1",
             &[Type::TEXT],
         ).await.unwrap();
-        let find_one_from_email_to_id_password_blocked = client.prepare_typed(
+        let find_one_from_email_to_password = client.prepare_typed(
             "SELECT id, password, blocked FROM \"user\" \
                 WHERE email = $1 AND NOT deleted LIMIT 1",
             &[Type::TEXT],
@@ -509,7 +518,7 @@ impl Query {
                 WHERE email = $1 AND NOT deleted LIMIT 1",
             &[Type::TEXT],
         ).await.unwrap();
-        let check_user_blocked = client.prepare_typed(
+        let check_blocked = client.prepare_typed(
             "SELECT blocked FROM \"user\" \
                 WHERE id = $1 AND NOT deleted LIMIT 1",
             &[Type::INT4],
@@ -536,16 +545,6 @@ impl Query {
                 SELECT role.name from user_role, role WHERE user_role.user = $2 \
                 AND user_role.role = role.id AND NOT role.deleted",
             &[Type::TEXT_ARRAY, Type::INT4]
-        ).await.unwrap();
-        let find_one_from_username_to_username_email = client.prepare_typed(
-            "SELECT username, email FROM \"user\" \
-                WHERE username = $1 AND NOT deleted LIMIT 1",
-            &[Type::TEXT],
-        ).await.unwrap();
-        let find_one_from_username_email_to_username_email = client.prepare_typed(
-            "SELECT username, email FROM \"user\" \
-                WHERE (username = $1 OR email = $2) AND NOT deleted LIMIT 1",
-            &[Type::TEXT, Type::TEXT],
         ).await.unwrap();
         let insert_one = client.prepare_typed(
             "INSERT INTO \"user\" (username, password, email, nickname, \
@@ -706,16 +705,14 @@ impl Query {
             &[Type::TEXT, Type::INT4]
         ).await.unwrap();
         Self {
-            find_one_from_username_to_id_password_blocked,
-            find_one_from_email_to_id_password_blocked,
+            find_one_from_username_to_password,
+            find_one_from_email_to_password,
             find_one_from_username_to_id,
             find_one_from_email_to_id,
-            check_user_blocked,
-            fetch_permission,
-            fetch_default_permission,
+            check_blocked,
+            fetch_permissions: fetch_permission,
+            fetch_default_permissions: fetch_default_permission,
             check_extra_roles,
-            find_one_from_username_to_username_email,
-            find_one_from_username_email_to_username_email,
             insert_one,
             insert_one_roles,
             fetch_avatars,
@@ -743,42 +740,20 @@ impl Query {
             update_password,
         }
     }
-    pub async fn find_one_from_username_to_id_password_blocked(
-        &self, client: &Client, username: &str,
-    ) -> Result<UserIdPasswordBlocked> {
-        let rows = client
-            .query(&self.find_one_from_username_to_id_password_blocked, &[&username])
-            .await?;
-        let row = rows
-            .get(0)
-            .ok_or_else(|| Error::UserNotFound)?;
-        Ok(UserIdPasswordBlocked {
-            id: row.get("id"),
-            password: row.get("password"),
-            blocked: row.get("blocked"),
-        })
-    }
-    pub async fn find_one_from_email_to_id_password_blocked(
-        &self, client: &Client, email: &str,
-    ) -> Result<UserIdPasswordBlocked> {
-        let rows = client
-            .query(&self.find_one_from_email_to_id_password_blocked, &[&email])
-            .await?;
-        let row = rows
-            .get(0)
-            .ok_or_else(|| Error::UserNotFound)?;
-        Ok(UserIdPasswordBlocked {
-            id: row.get("id"),
-            password: row.get("password"),
-            blocked: row.get("blocked"),
-        })
-    }
-    pub async fn check_user_valid_by_id(
-        &self, client: &Client, id: i32,
-    ) -> Result<()>
-    {
-        let rows = client
-            .query(&self.check_user_blocked, &[&id])
+}
+
+pub struct UserRegisterInfo<'a> {
+    pub username: &'a str,
+    pub email: &'a str,
+    pub password: &'a str,
+}
+
+impl AppDatabase {
+    pub async fn user_check_blocked(
+        &self, id: i32,
+    ) -> Result<()> {
+        let rows = self.db.read().await
+            .query(&self.user.check_blocked, &[&id])
             .await?;
         let row = rows
             .get(0)
@@ -788,11 +763,11 @@ impl Query {
         }
         Ok(())
     }
-    pub async fn fetch_permission(
-        &self, client: &Client, id: i32,
+    pub async fn user_fetch_permissions(
+        &self, id: i32,
     ) -> Result<Vec<PermissionSubjectAction>> {
-        let rows = client
-            .query(&self.fetch_permission, &[&id])
+        let rows = self.db.read().await
+            .query(&self.user.fetch_permissions, &[&id])
             .await?;
         Ok(rows.iter()
             .map(|row| PermissionSubjectAction {
@@ -801,11 +776,11 @@ impl Query {
             })
             .collect())
     }
-    pub async fn fetch_default_permission(
-        &self, client: &Client,
+    pub async fn user_fetch_default_permissions(
+        &self,
     ) -> Result<Vec<PermissionSubjectAction>> {
-        let rows = client
-            .query(&self.fetch_default_permission, &[])
+        let rows = self.db.read().await
+            .query(&self.user.fetch_default_permissions, &[])
             .await?;
         Ok(rows.iter()
             .map(|row| PermissionSubjectAction {
@@ -814,49 +789,52 @@ impl Query {
             })
             .collect())
     }
-    pub async fn check_extra_roles(
-        &self, client: &Client, id: i32, roles: &[String],
+    pub async fn user_check_extra_roles(
+        &self, id: i32, roles: &[String],
     ) -> Result<Vec<String>> {
-        let rows = client
-            .query(&self.check_extra_roles, &[&roles, &id])
+        let rows = self.db.read().await
+            .query(&self.user.check_extra_roles, &[&roles, &id])
             .await?;
         let results = rows.iter()
             .map(|x| x.get(0))
             .collect();
         Ok(results)
     }
-    pub async fn insert_one(
-        &self, client: &mut Client, username: &str, password: &str,
+    pub async fn user_insert_one(
+        &self, username: &str, password: &str,
         roles: &[String], email: &Option<String>, nickname: &Option<String>,
     ) -> Result<UserIdCreatedAt> {
+        let mut client = self.db.write().await;
         let transaction = client.build_transaction()
             .isolation_level(IsolationLevel::RepeatableRead)
             .start()
             .await?;
-        let duplicated_rows = match email {
-            Some(email) => transaction
-                .query(&self.find_one_from_username_email_to_username_email, &[&username, &email])
-                .await?,
-            None => transaction
-                .query(&self.find_one_from_username_to_username_email, &[&username])
-                .await?,
-        };
-        if let Some(row) = duplicated_rows.get(0) {
+        if !transaction.query(&self.user.find_one_from_username_to_id, &[&username])
+            .await?
+            .is_empty() {
             return Err(Error::DuplicatedUser {
-                field: if row.get::<&str, String>("username") == username { "username".into() }
-                else { "email".into() }
+                field: "username".into(),
             });
+        }
+        if let Some(email) = email {
+            if !transaction.query(&self.user.find_one_from_email_to_id, &[&email])
+                .await?
+                .is_empty() {
+                return Err(Error::DuplicatedUser {
+                    field: "email".into(),
+                });
+            }
         }
         let password = String::from(password);
         let password = block(move || bcrypt::hash(password, crate::constants::BCRYPT_COST))
             .await?;
         let user = transaction
-            .query_one(&self.insert_one, &[&username, &password, &email, &nickname])
+            .query_one(&self.user.insert_one, &[&username, &password, &email, &nickname])
             .await?;
         let id: i32 = user.get("id");
         if !roles.is_empty() {
             transaction
-                .query(&self.insert_one_roles, &[&id, &roles])
+                .query(&self.user.insert_one_roles, &[&id, &roles])
                 .await?;
         }
         transaction.commit()
@@ -866,17 +844,22 @@ impl Query {
             created_at: user.get("created_at"),
         })
     }
-    pub async fn check_user_valid(
-        &self, client: &Client, credit: &EitherUsernameOrEmail, password: &str,
+    pub async fn user_check_valid(
+        &self, credit: &EitherUsernameOrEmail, password: &str,
     ) -> Result<i32> {
-        let user = match credit {
+        let user: UserIdPasswordBlocked = match credit {
             EitherUsernameOrEmail::Username(username) =>
-                self.find_one_from_username_to_id_password_blocked(client, username)
+                self.db.read().await
+                    .query(&self.user.find_one_from_username_to_password, &[&username])
                     .await?,
             EitherUsernameOrEmail::Email(email) =>
-                self.find_one_from_email_to_id_password_blocked(client, email)
+                self.db.read().await
+                    .query(&self.user.find_one_from_email_to_password, &[&email])
                     .await?,
-        };
+        }
+            .get(0)
+            .ok_or_else(|| Error::UserNotFound)?
+            .into();
         let password = String::from(password);
         let hash = user.password.clone();
         let verified = block(move || bcrypt::verify(password, &hash))
@@ -889,11 +872,11 @@ impl Query {
         }
         Ok(user.id)
     }
-    pub async fn fetch_avatars(
-        &self, client: &Client, id: i32,
+    pub async fn user_fetch_avatars(
+        &self, id: i32,
     ) -> Result<UserAvatars> {
-        let rows = client
-            .query(&self.fetch_avatars, &[&id])
+        let rows = self.db.read().await
+            .query(&self.user.fetch_avatars, &[&id])
             .await?;
         let row = rows
             .get(0)
@@ -903,49 +886,49 @@ impl Query {
             avatar128: row.get("avatar128"),
         })
     }
-    pub async fn update_avatars(
-        &self, client: &Client, id: i32,
+    pub async fn user_update_avatars(
+        &self, id: i32,
         avatar: &Option<String>, avatar128: &Option<String>
     ) -> Result<DateTime<Utc>> {
-        let rows = client
-            .query(&self.update_avatars, &[avatar, avatar128, &id])
+        let rows = self.db.read().await
+            .query(&self.user.update_avatars, &[avatar, avatar128, &id])
             .await?;
         let row = rows
             .get(0)
             .ok_or_else(|| Error::UserNotFound)?;
         Ok(row.get("updated_at"))
     }
-    pub async fn find_one_all(
-        &self, client: &Client, uid: i32,
+    pub async fn user_find_one(
+        &self, uid: i32,
     ) -> Result<UserAll> {
-        let rows = client
-            .query(&self.find_one_with_roles, &[&uid])
+        let rows = self.db.read().await
+            .query(&self.user.find_one_with_roles, &[&uid])
             .await?;
         let row = rows
             .get(0)
             .ok_or_else(|| Error::UserNotFound)?;
         Ok(UserAll::from(row))
     }
-    pub async fn find_one_public(
-        &self, client: &Client, uid: i32,
+    pub async fn user_find_one_public(
+        &self, uid: i32,
     ) -> Result<UserPublic> {
-        let rows = client
-            .query(&self.find_one_public, &[&uid])
+        let rows = self.db.read().await
+            .query(&self.user.find_one_public, &[&uid])
             .await?;
         let row = rows
             .get(0)
             .ok_or_else(|| Error::UserNotFound)?;
         Ok(UserPublic::from(row))
     }
-    pub async fn fetch_permission_tree(
-        &self, client: &Client, id: Option<i32>,
+    pub async fn user_fetch_permission_tree(
+        &self, id: Option<i32>,
     ) -> Result<PermissionTree> {
         let rows = match id {
-            Some(id) => client
-                .query(&self.fetch_permission_tree, &[&id])
+            Some(id) => self.db.read().await
+                .query(&self.user.fetch_permission_tree, &[&id])
                 .await?,
-            None => client
-                .query(&self.fetch_default_permission_tree, &[])
+            None => self.db.read().await
+                .query(&self.user.fetch_default_permission_tree, &[])
                 .await?,
         };
         let mut tree = HashMap::new();
@@ -960,36 +943,43 @@ impl Query {
         }
         Ok(PermissionTree::new(tree))
     }
-    pub async fn check_username_existence(
-        &self, client: &Client, username: &str,
+    pub async fn user_check_username_existence(
+        &self, username: &str,
     ) -> Result<bool> {
-        let rows = client
-            .query(&self.find_one_from_username_to_id, &[&username])
+        let rows = self.db.read().await
+            .query(&self.user.find_one_from_username_to_id, &[&username])
             .await?;
         Ok(!rows.is_empty())
     }
-    pub async fn check_email_existence(
-        &self, client: &Client, email: &str,
+    pub async fn user_check_email_existence(
+        &self, email: &str,
     ) -> Result<bool> {
-        let rows = client
-            .query(&self.find_one_from_email_to_id, &[&email])
+        let rows = self.db.read().await
+            .query(&self.user.find_one_from_email_to_id, &[&email])
             .await?;
         Ok(!rows.is_empty())
     }
-    pub async fn register_user(
-        &self, client: &Client,
+    pub async fn user_register(
+        &self,
         smtp: web::Data<AppSmtp>, // for smtp
         sender: &str, site: &str,
-        username: &str, email: &str, password: &str,
+        info: UserRegisterInfo<'_>,
     ) -> Result<UserRegistration> {
-        let duplicated_rows = client
-            .query(&self.find_one_from_username_email_to_username_email,
-                   &[&username, &email])
-            .await?;
-        if let Some(row) = duplicated_rows.get(0) {
+        let UserRegisterInfo { username, password, email } = info;
+        if !self.db.read().await
+            .query(&self.user.find_one_from_username_to_id, &[&username])
+            .await?
+            .is_empty() {
             return Err(Error::DuplicatedUser {
-                field: if row.get::<&str, String>("username") == username { "username".into() }
-                else { "email".into() }
+                field: "username".into(),
+            });
+        }
+        if !self.db.read().await
+            .query(&self.user.find_one_from_email_to_id, &[&email])
+            .await?
+            .is_empty() {
+            return Err(Error::DuplicatedUser {
+                field: "email".into(),
             });
         }
         let mut rng = thread_rng();
@@ -1002,14 +992,14 @@ impl Query {
             .take(6)
             .collect();
         let message = register_user_email(sender.parse()?, email.parse()?,
-                                        site, username, &id, &code)?;
+                                          site, username, &id, &code)?;
         block(move || smtp.smtp.send(&message))
             .await?;
         let password = String::from(password);
         let password = block(move || bcrypt::hash(password, crate::constants::BCRYPT_COST))
             .await?;
-        let row = client
-            .query_one(&self.insert_one_into_user_registration,
+        let row = self.db.read().await
+            .query_one(&self.user.insert_one_into_user_registration,
                        &[&id, &code, &username, &password, &email])
             .await?;
         Ok(UserRegistration {
@@ -1019,15 +1009,16 @@ impl Query {
             expires_at: row.get("expires_at"),
         })
     }
-    pub async fn confirm_registration(
-        &self, client: &mut Client, id: &str, code: &Option<String>,
+    pub async fn user_confirm_registration(
+        &self, id: &str, code: &Option<String>,
     ) -> Result<UserCreatedByRegistration> {
+        let mut client = self.db.write().await;
         let transaction = client.build_transaction()
             .isolation_level(IsolationLevel::RepeatableRead)
             .start()
             .await?;
         let rows = transaction
-            .query(&self.find_one_from_user_registration, &[&id])
+            .query(&self.user.find_one_from_user_registration, &[&id])
             .await?;
         let row = rows
             .get(0)
@@ -1045,31 +1036,35 @@ impl Query {
                 return Err(Error::UserRegistrationWrongCode);
             }
         }
-        let duplicated_rows = transaction
-            .query(&self.find_one_from_username_email_to_username_email,
-                   &[&username, &email])
-            .await?;
-        if let Some(row) = duplicated_rows.get(0) {
+        if !transaction.query(&self.user.find_one_from_username_to_id, &[&username])
+            .await?
+            .is_empty() {
             return Err(Error::DuplicatedUser {
-                field: if row.get::<&str, String>("username") == username { "username".into() }
-                else { "email".into() }
+                field: "username".into(),
+            });
+        }
+        if !transaction.query(&self.user.find_one_from_email_to_id, &[&email])
+            .await?
+            .is_empty() {
+            return Err(Error::DuplicatedUser {
+                field: "email".into(),
             });
         }
         let user = transaction
-            .query_one(&self.insert_one_registered_user, &[&username, &password, &email])
+            .query_one(&self.user.insert_one_registered_user, &[&username, &password, &email])
             .await?;
         let user_id: i32 = user.get("id");
         let roles = transaction
-            .query(&self.find_default_roles, &[])
+            .query(&self.user.find_default_roles, &[])
             .await?
             .iter()
             .map(|x| x.get("name"))
             .collect::<Vec<String>>();
         transaction
-            .query(&self.insert_one_roles, &[&user_id, &roles])
+            .query(&self.user.insert_one_roles, &[&user_id, &roles])
             .await?;
         transaction
-            .query(&self.complete_registration, &[&id])
+            .query(&self.user.complete_registration, &[&id])
             .await?;
         transaction.commit().await?;
         Ok(UserCreatedByRegistration {
@@ -1080,11 +1075,11 @@ impl Query {
             created_at: user.get("created_at"),
         })
     }
-    pub async fn query_registration(
-        &self, client: &Client, id: &str,
+    pub async fn user_query_registration(
+        &self, id: &str,
     ) -> Result<UserRegistrationPublic> {
-        let rows = client
-            .query(&self.query_registration, &[&id])
+        let rows = self.db.read().await
+            .query(&self.user.query_registration, &[&id])
             .await?;
         let row = rows
             .get(0)
@@ -1095,13 +1090,12 @@ impl Query {
         }
         Ok(registration)
     }
-    pub async fn resend_registration_email(
-        &self, client: &Client,
-        smtp: web::Data<AppSmtp>,
+    pub async fn user_resend_registration_email(
+        &self, smtp: web::Data<AppSmtp>,
         sender: &str, site: &str, id: &str,
     ) -> Result<()> {
-        let rows = client
-            .query(&self.find_one_from_user_registration_without_password, &[&id])
+        let rows = self.db.read().await
+            .query(&self.user.find_one_from_user_registration_without_password, &[&id])
             .await?;
         let row = rows
             .get(0)
@@ -1119,48 +1113,47 @@ impl Query {
             .await?;
         Ok(())
     }
-    pub async fn update_user(
-        &self, client: &mut Client, id: i32,
+    pub async fn user_update(
+        &self, id: i32,
         username: &Option<String>, email: &Option<Option<String>>,
         nickname: &Option<Option<String>>, blocked: &Option<Option<bool>>,
     ) -> Result<DateTime<Utc>> {
+        let mut client = self.db.write().await;
         let transaction = client.build_transaction()
             .isolation_level(IsolationLevel::RepeatableRead)
             .start()
             .await?;
-        match username {
-            Some(username) => if transaction
-                .query(&self.find_one_from_username_to_id, &[&username])
+        if let Some(username) = username {
+            if transaction
+                .query(&self.user.find_one_from_username_to_id, &[&username])
                 .await?
                 .get(0)
                 .map(|x| x.get::<&str, i32>("id"))
                 .is_some() {
                 return Err(Error::DuplicatedUser { field: "username".into() });
             }
-            _ => ()
         }
-        match email {
-            Some(Some(email)) => if transaction
-                .query(&self.find_one_from_email_to_id, &[&email])
+        if let Some(Some(email)) = email {
+            if transaction
+                .query(&self.user.find_one_from_email_to_id, &[&email])
                 .await?
                 .get(0)
                 .map(|x| x.get::<&str, i32>("id"))
                 .is_some() {
                 return Err(Error::DuplicatedUser { field: "email".into() });
             }
-            _ => ()
         }
         let enable_username = username.is_some();
         let enable_email = email.is_some();
         let enable_nickname = nickname.is_some();
         let enable_blocked = blocked.is_some();
         let rows = transaction
-            .query(&self.update_user,
+            .query(&self.user.update_user,
                    &[&enable_username, &username,
                        &enable_email, &email.clone().flatten(),
                        &enable_nickname, &nickname.clone().flatten(),
                        &enable_blocked, &blocked.clone().flatten(),
-                   &id])
+                       &id])
             .await?;
         let row = rows
             .get(0)
@@ -1169,20 +1162,19 @@ impl Query {
             .await?;
         Ok(row.get("updated_at"))
     }
-    pub async fn update_email(
-        &self, client: &Client,
-        smtp: web::Data<AppSmtp>, // for smtp
-        sender: &str, site: &str,
+    pub async fn user_update_email(
+        &self,
+        smtp: web::Data<AppSmtp>, sender: &str, site: &str,
         uid: i32, new_email: &str,
     ) -> Result<UserEmailUpdating> {
-        let username: String = client
-            .query(&self.find_one_to_username, &[&uid])
+        let username: String = self.db.read().await
+            .query(&self.user.find_one_to_username, &[&uid])
             .await?
             .get(0)
             .ok_or_else(|| Error::UserNotFound)?
             .get("username");
-        let rows = client
-            .query(&self.find_one_from_email_to_id, &[&new_email])
+        let rows = self.db.read().await
+            .query(&self.user.find_one_from_email_to_id, &[&new_email])
             .await?;
         if !rows.is_empty() {
             return Err(Error::DuplicatedUser { field: "email".into() });
@@ -1200,8 +1192,8 @@ impl Query {
                                         site, &username, &id, &code)?;
         block(move || smtp.smtp.send(&message))
             .await?;
-        let row = client
-            .query_one(&self.insert_one_into_user_email_updating,
+        let row = self.db.read().await
+            .query_one(&self.user.insert_one_into_user_email_updating,
                        &[&id, &code, &uid, &new_email])
             .await?;
         Ok(UserEmailUpdating {
@@ -1211,15 +1203,16 @@ impl Query {
             expires_at: row.get("expires_at"),
         })
     }
-    pub async fn confirm_email_updating(
-        &self, client: &mut Client, id: &str, code: &Option<String>, required_uid: &Option<i32>,
+    pub async fn user_confirm_email_updating(
+        &self, id: &str, code: &Option<String>, required_uid: &Option<i32>,
     ) -> Result<UserIdEmailUpdatedAt> {
+        let mut client = self.db.write().await;
         let transaction = client.build_transaction()
             .isolation_level(IsolationLevel::RepeatableRead)
             .start()
             .await?;
         let rows = transaction
-            .query(&self.find_one_from_user_email_updating, &[&id])
+            .query(&self.user.find_one_from_user_email_updating, &[&id])
             .await?;
         let row = rows
             .get(0)
@@ -1242,19 +1235,19 @@ impl Query {
             }
         }
         let rows = transaction
-            .query(&self.find_one_from_email_to_id, &[&new_email])
+            .query(&self.user.find_one_from_email_to_id, &[&new_email])
             .await?;
         if !rows.is_empty() {
             return Err(Error::DuplicatedUser { field: "email".into() });
         }
         let rows = transaction
-            .query(&self.update_email, &[&new_email, &user])
+            .query(&self.user.update_email, &[&new_email, &user])
             .await?;
         let row = rows
             .get(0)
             .ok_or_else(|| Error::UserNotFound)?;
         transaction
-            .query(&self.complete_email_updating, &[&id])
+            .query(&self.user.complete_email_updating, &[&id])
             .await?;
         transaction.commit().await?;
         Ok(UserIdEmailUpdatedAt {
@@ -1263,35 +1256,34 @@ impl Query {
             updated_at: row.get("updated_at"),
         })
     }
-    pub async fn query_email_updating(
-        &self, client: &Client, id: &str, required_uid: Option<i32>,
+    pub async fn user_query_email_updating(
+        &self, id: &str, required_uid: Option<i32>,
     ) -> Result<UserEmailUpdatingPublic> {
-        let rows = client
-            .query(&self.query_email_updating, &[&id])
+        let rows = self.db.read().await
+            .query(&self.user.query_email_updating, &[&id])
             .await?;
         let row = rows
             .get(0)
             .ok_or_else(|| Error::UserEmailUpdatingNotFound)?;
         let registration = UserEmailUpdatingPublic::from(row);
-        match required_uid {
-            Some(required_uid) => if required_uid != registration.user {
+        if let Some(required_uid) = required_uid {
+            if required_uid != registration.user {
                 return Err(Error::UserNotMatch)
             }
-            None => (),
         }
         if registration.completed.is_none() && registration.expires_at < Utc::now() {
             return Err(Error::UserEmailUpdatingExpired);
         }
         Ok(registration)
     }
-    pub async fn resend_email_updating_email(
-        &self, client: &Client,
+    pub async fn user_resend_email_updating_email(
+        &self,
         smtp: web::Data<AppSmtp>,
         sender: &str, site: &str, id: &str,
         required_uid: Option<i32>,
     ) -> Result<()> {
-        let rows = client
-            .query(&self.find_one_from_user_email_updating_join_user, &[&id])
+        let rows = self.db.read().await
+            .query(&self.user.find_one_from_user_email_updating_join_user, &[&id])
             .await?;
         let row = rows
             .get(0)
@@ -1301,11 +1293,10 @@ impl Query {
         let username: String = row.get("username");
         let email: String = row.get("new_email");
         let expires_at: DateTime<Utc> = row.get("expires_at");
-        match required_uid {
-            Some(required_uid) => if required_uid != uid {
+        if let Some(required_uid) = required_uid {
+            if required_uid != uid {
                 return Err(Error::UserNotMatch)
             }
-            None => (),
         }
         if expires_at < Utc::now() {
             return Err(Error::UserEmailUpdatingExpired);
@@ -1316,16 +1307,17 @@ impl Query {
             .await?;
         Ok(())
     }
-    pub async fn update_password(
-        &self, client: &mut Client, id: i32, password: String, old_password: Option<String>
+    pub async fn user_update_password(
+        &self, id: i32, password: String, old_password: Option<String>
     ) -> Result<DateTime<Utc>> {
+        let mut client = self.db.write().await;
         let transaction = client.build_transaction()
             .isolation_level(IsolationLevel::RepeatableRead)
             .start()
             .await?;
         if let Some(old_password) = old_password {
             let old_password_hash: String = transaction
-                .query(&self.find_one_to_password, &[&id])
+                .query(&self.user.find_one_to_password, &[&id])
                 .await?
                 .get(0)
                 .ok_or_else(|| Error::UserNotFound)?
@@ -1339,7 +1331,7 @@ impl Query {
         let password_hash = block(move || bcrypt::hash(password, crate::constants::BCRYPT_COST))
             .await?;
         let updated_at = transaction
-            .query(&self.update_password, &[&password_hash, &id])
+            .query(&self.user.update_password, &[&password_hash, &id])
             .await?
             .get(0)
             .ok_or_else(|| Error::UserNotFound)?

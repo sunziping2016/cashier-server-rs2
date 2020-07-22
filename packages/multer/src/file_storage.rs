@@ -61,8 +61,8 @@ pub struct FileStorageBuilder {
     make_dirs: bool,
 }
 
-impl FileStorageBuilder {
-    pub fn new() -> FileStorageBuilder {
+impl Default for FileStorageBuilder {
+    fn default() -> Self {
         Self {
             max_size: None,
             destination: None,
@@ -70,6 +70,9 @@ impl FileStorageBuilder {
             make_dirs: false,
         }
     }
+}
+
+impl FileStorageBuilder {
     pub fn max_size(mut self, size: usize) -> Self {
         self.max_size = Some(size);
         self

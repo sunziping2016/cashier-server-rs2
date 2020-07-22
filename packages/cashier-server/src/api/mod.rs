@@ -65,7 +65,7 @@ pub fn api_v1(
                         .app_data(config.clone())
                         .app_data(database.clone())
                         .app_data(subscriber.clone())
-                        .app_data(smtp.clone())
+                        .app_data(smtp)
                         .route("", web::route().to(websocket))
                 )
         );

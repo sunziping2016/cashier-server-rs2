@@ -140,7 +140,7 @@ pub fn process_query(
         }
         None => (
             format!("{} {}", id, direction),
-            format!("{}", id),
+            id,
         )
     };
     let mut conditions: Vec<String> = Vec::new();

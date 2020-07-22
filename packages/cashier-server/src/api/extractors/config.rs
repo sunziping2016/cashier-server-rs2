@@ -40,7 +40,7 @@ pub fn default_query_config() -> QueryConfig {
 
 pub fn avatar_multer_config() -> Arc<MulterConfig> {
     Arc::new(MulterConfig::new()
-        .field("avatar", FieldConfig::new()
+        .field("avatar", FieldConfig::default()
             .single()
             .accept_file(true)
             .accept_content_type(vec![mime::IMAGE_PNG, mime::IMAGE_JPEG])

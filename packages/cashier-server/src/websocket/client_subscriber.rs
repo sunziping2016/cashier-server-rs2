@@ -440,8 +440,8 @@ impl Handler<ReloadPermissionsFromDatabase> for ClientSubscriber {
         let database = self.database.clone();
         let user_id = self.claims.as_ref().map(|x| x.user_id);
         Box::new(async move {
-            database.query.user
-                .fetch_permission_tree(&*database.db.read().await, user_id)
+            database
+                .user_fetch_permission_tree(user_id)
                 .await
         }
             .into_actor(self)
@@ -667,14 +667,14 @@ impl Handler<UpdateTokenRequest> for ClientSubscriber {
         Box::new(async move {
             match msg.jwt {
                 Some(token) => {
-                    let claims = database.query.token
-                        .verify_token(&*database.db.read().await, &token)
+                    let claims = database
+                        .token_verify(&token)
                         .await?;
-                    database.query.token
-                        .check_token_revoked(&*database.db.read().await, claims.jti)
+                    database
+                        .token_check_revoked(claims.jti)
                         .await?;
-                    database.query.user
-                        .check_user_valid_by_id(&*database.db.read().await, claims.uid)
+                    database
+                        .user_check_blocked(claims.uid)
                         .await?;
                     Ok(Some(Claims {
                         user_id: claims.uid,
